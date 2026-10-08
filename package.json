@@ -1,0 +1,20 @@
+{
+  "name": "auditoria-caixas",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Auditoria de fechos de caixa: cruza o diário de caixa e as faturas do PMS com os talões TPA.",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server.js",
+    "importar": "node --disable-warning=ExperimentalWarning importar.js",
+    "test": "node --disable-warning=ExperimentalWarning --test"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "latest",
+    "express": "^5.1.0",
+    "multer": "^2.0.0"
+  }
+}

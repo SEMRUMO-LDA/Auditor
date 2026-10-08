@@ -1,0 +1,6 @@
+node_modules/
+.env
+
+# Dados reais (hóspedes, reservas, faturas, talões): nunca vão para o repositório.
+data/
+test/amostra/
