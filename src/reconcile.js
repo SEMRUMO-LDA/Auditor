@@ -1,6 +1,7 @@
 // Cruzamento de um dia: diário de caixa x faturas x talões TPA.
 // Só deteta e regista inconsistências; nunca altera os dados de origem.
 import { all, get, run, tx, agora, config } from './db.js';
+import { MEIO_NUMERARIO, totalContado } from './numerario.js';
 
 export const SEM_AGENCIA = '(direto)';
 export const PRAZO_OMISSAO = 6;
@@ -12,6 +13,7 @@ const INATIVOS = new Set(['Cancelation', 'No-show']);
 export const TIPOS = {
   DIARIO_TOTAL: 'Total do diário não confere',
   DIARIO_TOTAL_UTILIZADOR: 'Total do utilizador não confere',
+  CONTAGEM_NUMERARIO: 'Contagem de numerário não confere',
   MOV_SEM_DOC: 'Movimento sem documento',
   MOV_SEM_FATURA: 'Movimento sem fatura',
   FATURA_SEM_MOV: 'Fatura sem movimento de caixa',
@@ -164,6 +166,23 @@ export function reconciliar(data) {
     if (porId.length) return porId.map(regReserva);
     return m.quarto ? reservasDoDia.filter((l) => l.unidade.replace(/>>/g, '').trim() === m.quarto).map(regReserva) : [];
   };
+
+  // ---------- Contagem de numerário feita pelo auditor contra o CASH do diário ----------
+  const contagemNum = all('SELECT valor, quantidade FROM contagens_numerario WHERE data = ?', data);
+  if (contagemNum.length && temDiario) {
+    const contado = totalContado(Object.fromEntries(contagemNum.map((c) => [c.valor, c.quantidade])));
+    const esperado = soma(mov.filter((m) => m.tipo === MEIO_NUMERARIO));
+    if (contado !== esperado) {
+      add('CONTAGEM_NUMERARIO', MEIO_NUMERARIO, {
+        titulo: `Numerário: contados ${euros(contado)} em notas e moedas, o diário regista ${euros(esperado)} em ${MEIO_NUMERARIO} (${contado > esperado ? 'sobram' : 'faltam'} ${euros(Math.abs(contado - esperado))})`,
+        valor: (contado - esperado) / 100,
+        detalhe: {
+          texto: 'A contagem de notas e moedas feita pelo auditor não corresponde ao total em numerário registado no diário de caixa.',
+          registos: [{ origem: 'Contagem', Contado: contado / 100, Diário: esperado / 100, Diferença: (contado - esperado) / 100 }],
+        },
+      });
+    }
+  }
 
   // ---------- A. Coerência interna do diário ----------
   if (temDiario) {

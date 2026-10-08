@@ -2,7 +2,7 @@
 
 export class ErroFicheiro extends Error {}
 
-function descodificar(buffer) {
+export function descodificar(buffer) {
   if (buffer[0] === 0xff && buffer[1] === 0xfe) return buffer.toString('utf16le').slice(1);
   const texto = buffer.toString('utf8').replace(/^﻿/, '');
   // Se o ficheiro não for UTF-8 válido (exportação antiga em Windows-1252), relê-se nessa codificação.

@@ -4,3 +4,9 @@ node_modules/
 # Dados reais (hóspedes, reservas, faturas, talões): nunca vão para o repositório.
 data/
 test/amostra/
+
+# Ficheiros de trabalho com dados reais (PMS, extratos bancários, talões) e ficheiros locais.
+Caixa/
+.claude/
+.DS_Store
+*.log

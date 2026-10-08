@@ -11,6 +11,10 @@ import { ErroFicheiro } from './src/parsers.js';
 import { importar } from './src/fechos.js';
 import { reconciliar, reconciliarTudo, resumoReservas, PRAZO_OMISSAO } from './src/reconcile.js';
 import { lerTaloes, ErroLeitura, MIMES_IMAGEM } from './src/leitor.js';
+import { DENOMINACOES, MAX_QUANTIDADE, MEIO_NUMERARIO, totalContado } from './src/numerario.js';
+import { analisarMeios } from './src/meios.js';
+import { lerExtrato, ErroExtrato, centimos } from './src/extratos.js';
+import { comprovativosAteDia, liquidacoesAteDia, usoDasLinhas, guardarExtrato, MEIOS_BANCARIOS } from './src/comprovativos.js';
 import * as v from './src/views.js';
 
 const app = express();
@@ -122,6 +126,18 @@ app.post('/fechos/carregar', exigirAuditor, (req, res, next) => {
   });
 });
 
+// Período pedido na ligação (?de=AAAA-MM-DD&ate=AAAA-MM-DD). Aceita só uma das pontas, corrige a ordem e,
+// por compatibilidade com ligações antigas, trata ?data= como um único dia.
+function lerPeriodo(query) {
+  const dia = (k) => (typeof query[k] === 'string' && RE_DATA.test(query[k]) ? query[k] : '');
+  let de = dia('de') || (dia('ate') ? '' : dia('data'));
+  let ate = dia('ate') || (dia('de') ? '' : dia('data'));
+  if (de && !ate) ate = de;
+  if (ate && !de) de = ate;
+  if (de > ate) [de, ate] = [ate, de];
+  return { de, ate };
+}
+
 const CAMPOS_FILTRO = ['data', 'estado', 'gravidade', 'tipo', 'utilizador', 'caixa'];
 function lerFiltros(query, fixos = {}) {
   const f = { ...fixos };
@@ -131,6 +147,10 @@ function lerFiltros(query, fixos = {}) {
 function listarIncs(f) {
   const cond = ['1 = 1'];
   const ps = [];
+  if (f.de) {
+    cond.push('i.data >= ? AND i.data <= ?');
+    ps.push(f.de, f.ate);
+  }
   for (const k of CAMPOS_FILTRO) {
     if (f[k]) {
       cond.push(`i.${k} = ?`);
@@ -148,7 +168,7 @@ function opcoesFiltro(data) {
   const onde = data ? 'WHERE data = ?' : '';
   const ps = data ? [data] : [];
   const distintos = (col) => all(`SELECT DISTINCT ${col} AS x FROM inconsistencias ${onde} ORDER BY 1`, ...ps).map((r) => r.x).filter(Boolean);
-  return { tipos: distintos('tipo'), utilizadores: distintos('utilizador'), caixas: distintos('caixa') };
+  return { tipos: distintos('tipo'), utilizadores: distintos('utilizador'), caixas: distintos('caixa'), dias: distintos('data') };
 }
 
 const SQL_TALOES = `
@@ -171,10 +191,11 @@ app.get('/fechos/:data', exigirAuditor, (req, res, next) => {
   const meios = all(
     `SELECT x.tipo, COALESCE(m.tpa, 0) AS tpa,
       (SELECT COALESCE(SUM(valor), 0) FROM movimentos WHERE data = ? AND tipo = x.tipo) AS diario,
+      (SELECT COUNT(*) FROM movimentos WHERE data = ? AND tipo = x.tipo) AS movimentos,
       (SELECT COALESCE(SUM(valor), 0) FROM faturas WHERE data = ? AND tipo = x.tipo) AS faturas
      FROM (SELECT tipo FROM movimentos WHERE data = ? UNION SELECT tipo FROM faturas WHERE data = ?) x
      LEFT JOIN meios m ON m.codigo = x.tipo ORDER BY x.tipo`,
-    data, data, data, data,
+    data, data, data, data, data,
   );
   const porUtilizador = all(
     `SELECT m.utilizador, COUNT(*) AS n, SUM(m.valor) AS total, REPLACE(GROUP_CONCAT(DISTINCT m.caixa), ',', ', ') AS caixas,
@@ -182,19 +203,115 @@ app.get('/fechos/:data', exigirAuditor, (req, res, next) => {
      FROM movimentos m WHERE m.data = ? GROUP BY m.utilizador ORDER BY m.utilizador`,
     data,
   );
+  const valoresUtilizador = new Map();
+  for (const r of all('SELECT utilizador, tipo, SUM(valor) AS v FROM movimentos WHERE data = ? GROUP BY utilizador, tipo', data)) {
+    if (!valoresUtilizador.has(r.utilizador)) valoresUtilizador.set(r.utilizador, {});
+    valoresUtilizador.get(r.utilizador)[r.tipo] = r.v;
+  }
+  for (const u of porUtilizador) u.porMeio = valoresUtilizador.get(u.utilizador) || {};
   const contagem = Object.fromEntries(
     all(`SELECT estado, COUNT(*) AS n FROM inconsistencias WHERE data = ? AND (ativa = 1 OR estado <> 'pendente') GROUP BY estado`, data).map((r) => [r.estado, r.n]),
   );
+  // Por alojamento (unidade/caixa): movimentos e valor por meio de pagamento, mais as inconsistências pendentes.
+  const aloj = new Map();
+  const doAloj = (caixa) => {
+    if (!aloj.has(caixa)) aloj.set(caixa, { caixa, n: 0, total: 0, porMeio: {}, pendentes: 0 });
+    return aloj.get(caixa);
+  };
+  for (const r of all('SELECT caixa, tipo, COUNT(*) AS n, SUM(valor) AS v FROM movimentos WHERE data = ? GROUP BY caixa, tipo', data)) {
+    const a = doAloj(r.caixa || '');
+    a.n += r.n;
+    a.total += r.v;
+    a.porMeio[r.tipo] = (a.porMeio[r.tipo] || 0) + r.v;
+  }
+  let pendentesSemAlojamento = 0;
+  for (const r of all(`SELECT caixa, COUNT(*) AS n FROM inconsistencias WHERE data = ? AND estado = 'pendente' AND ativa = 1 GROUP BY caixa`, data)) {
+    if (r.caixa) doAloj(r.caixa).pendentes += r.n;
+    else pendentesSemAlojamento += r.n;
+  }
+  const porAlojamento = [...aloj.values()].sort((x, y) => x.caixa.localeCompare(y.caixa, 'pt', { sensitivity: 'base' }));
+
+  const quantidades = Object.fromEntries(all('SELECT valor, quantidade FROM contagens_numerario WHERE data = ?', data).map((c) => [c.valor, c.quantidade]));
+  const numerario = {
+    quantidades,
+    existe: Boolean(fecho.contagem_em),
+    em: fecho.contagem_em,
+    contado: totalContado(quantidades),
+    esperado: Math.round((get('SELECT COALESCE(SUM(valor), 0) AS v FROM movimentos WHERE data = ? AND tipo = ?', data, MEIO_NUMERARIO).v) * 100),
+    temDiario: Boolean(fecho.diario_ficheiro),
+    abrir: req.query.contagem === '1',
+  };
+  // Análise por meio de pagamento: diário contra faturas e, nos meios TPA, contra os talões enviados.
+  const SQL_TALOES_DIA = `SELECT t.id, t.envio_id, t.valor, t.doc_associado, t.hora, t.tpa, t.cartao, t.ultimos4, t.reservas
+    FROM taloes t JOIN envios e ON e.id = t.envio_id WHERE t.data = ? AND t.tipo = ? AND e.estado = 'confirmado' ORDER BY t.hora, t.id`;
+  // Terminais (nº do TPA) e as caixas a que pertencem; os que partilham caixas formam um grupo, como no cruzamento.
+  const terminais = all('SELECT id, numero, nome FROM tpas ORDER BY numero').map((t) => ({ ...t, caixas: all('SELECT caixa FROM tpa_caixas WHERE tpa_id = ? ORDER BY caixa', t.id).map((c) => c.caixa) }));
+  const terminaisPorNumero = new Map(terminais.map((t) => [t.numero, t]));
+  const bancario = comprovativosAteDia(data);
+  const analise = analisarMeios({
+    meios,
+    movimentos: all('SELECT doc, hora, quarto, nome, valor, tipo, caixa, utilizador FROM movimentos WHERE data = ? ORDER BY hora, id', data),
+    faturas: all('SELECT doc, tipo, valor, reserva, hospede, quarto FROM faturas WHERE data = ? ORDER BY id', data),
+    taloes: all(SQL_TALOES_DIA, data, 'compra'),
+    numerario,
+    temFaturas: Boolean(fecho.faturas_ficheiro),
+    temDiario: numerario.temDiario,
+    terminais: terminaisPorNumero,
+    bancario,
+  });
+  const fechos = all(SQL_TALOES_DIA, data, 'fecho');
+  const pai = new Map();
+  const raiz = (x) => {
+    if (!pai.has(x)) pai.set(x, x);
+    while (pai.get(x) !== x) x = pai.get(x);
+    return x;
+  };
+  for (const t of terminais) for (const c of t.caixas) pai.set(raiz(`T:${t.numero}`), raiz(`C:${c}`));
+  const meiosTPA = new Set(meios.filter((m) => m.tpa).map((m) => m.tipo));
+  const movimentosTPA = all('SELECT caixa, tipo, valor FROM movimentos WHERE data = ?', data).filter((m) => meiosTPA.has(m.tipo));
+  const liquidacoes = liquidacoesAteDia(data);
+  const fechosTPA = fechos.map((f) => {
+    const terminal = terminaisPorNumero.get(f.tpa) || null;
+    const base = { ...f, terminal, caixas: terminal?.caixas || [], credito: liquidacoes.mapa.get(f.id) || null, temCreditos: liquidacoes.temCreditos };
+    if (!base.caixas.length) return base;
+    const grupo = raiz(`T:${f.tpa}`);
+    const tpasDoGrupo = new Set(terminais.filter((t) => t.caixas.length && raiz(`T:${t.numero}`) === grupo).map((t) => t.numero));
+    const caixasDoGrupo = new Set(terminais.filter((t) => tpasDoGrupo.has(t.numero)).flatMap((t) => t.caixas));
+    const fecho = fechos.filter((x) => tpasDoGrupo.has(x.tpa)).reduce((s, x) => s + Math.round(x.valor * 100), 0);
+    const diario = movimentosTPA.filter((m) => caixasDoGrupo.has(m.caixa)).reduce((s, m) => s + Math.round(m.valor * 100), 0);
+    return { ...base, grupo: { terminais: [...tpasDoGrupo], caixas: [...caixasDoGrupo], fecho, diario } };
+  });
   const filtros = lerFiltros(req.query, { data });
   res.send(
     v.fechoPage(req.user, {
-      fecho, totais, meios, porUtilizador, contagem, filtros,
+      fecho, totais, meios, porUtilizador, porAlojamento, pendentesSemAlojamento, analise, bancario, fechosTPA, terminaisPorNumero: Object.fromEntries(terminaisPorNumero), caixasLista: all('SELECT codigo FROM caixas ORDER BY codigo COLLATE NOCASE').map((c) => c.codigo), contagem, filtros, numerario,
       reservas: resumoReservas(data),
       incs: listarIncs(filtros),
       opcoes: opcoesFiltro(data),
       taloes: all(`${SQL_TALOES} WHERE t.data = ? AND e.estado = 'confirmado' ORDER BY t.hora, t.id`, data),
     }),
   );
+});
+
+app.post('/fechos/:data/contagem', exigirAuditor, (req, res, next) => {
+  const { data } = req.params;
+  if (!RE_DATA.test(data) || !get('SELECT 1 AS x FROM fechos WHERE data = ?', data)) return next();
+  const q = req.body?.q && typeof req.body.q === 'object' ? req.body.q : {};
+  const quantidades = {};
+  for (const c of DENOMINACOES) {
+    const bruto = String(q[c] ?? '').trim();
+    if (bruto !== '' && !/^\d{1,5}$/.test(bruto)) {
+      return res.status(400).send(v.erroPage(req.user, 'Contagem inválida', `As quantidades têm de ser números inteiros entre 0 e ${MAX_QUANTIDADE}.`));
+    }
+    quantidades[c] = bruto === '' ? 0 : Number(bruto);
+  }
+  tx(() => {
+    run('DELETE FROM contagens_numerario WHERE data = ?', data);
+    for (const c of DENOMINACOES) run('INSERT INTO contagens_numerario (data, valor, quantidade) VALUES (?, ?, ?)', data, c, quantidades[c]);
+    run('UPDATE fechos SET contagem_por = ?, contagem_em = ? WHERE data = ?', req.user.id, agora(), data);
+  });
+  reconciliar(data);
+  res.redirect(`/fechos/${data}?contagem=1#numerario`);
 });
 
 app.post('/fechos/:data/reconciliar', exigirAuditor, (req, res, next) => {
@@ -206,11 +323,13 @@ app.post('/fechos/:data/reconciliar', exigirAuditor, (req, res, next) => {
 // ---------- Diários: resumo geral das faturas de todos os dias carregados (auditor) ----------
 function dadosDiarios(query) {
   const texto = (k) => (typeof query[k] === 'string' ? query[k] : '');
-  const filtros = { mes: /^\d{4}-\d{2}$/.test(texto('mes')) ? texto('mes') : '', serie: texto('serie'), meio: texto('meio') };
+  const { de, ate } = lerPeriodo(query);
+  const filtros = { de, ate, serie: texto('serie'), unidade: texto('unidade'), meio: texto('meio') };
   const cond = ['1 = 1'];
   const ps = [];
-  if (filtros.mes) { cond.push('substr(f.data, 1, 7) = ?'); ps.push(filtros.mes); }
+  if (filtros.de) { cond.push('f.data >= ? AND f.data <= ?'); ps.push(filtros.de, filtros.ate); }
   if (filtros.serie) { cond.push(`substr(f.doc, 1, instr(f.doc, '/') - 1) = ?`); ps.push(filtros.serie); }
+  if (filtros.unidade) { cond.push('f.hotel = ?'); ps.push(filtros.unidade); }
   if (filtros.meio) { cond.push('f.tipo = ?'); ps.push(filtros.meio); }
   const faturas = all(
     `SELECT f.*, (SELECT MIN(m.hora) FROM movimentos m WHERE m.data = f.data AND m.doc = f.doc) AS hora
@@ -242,8 +361,9 @@ function dadosDiarios(query) {
     filtros,
     linhas,
     opcoes: {
-      meses: distintos('SELECT DISTINCT substr(data, 1, 7) AS x FROM faturas ORDER BY 1'),
+      dias: distintos('SELECT DISTINCT data AS x FROM faturas ORDER BY 1'),
       series: distintos(`SELECT DISTINCT substr(doc, 1, instr(doc, '/') - 1) AS x FROM faturas ORDER BY 1`),
+      unidades: distintos('SELECT DISTINCT hotel AS x FROM faturas ORDER BY hotel COLLATE NOCASE'),
       meios: distintos('SELECT DISTINCT tipo AS x FROM faturas ORDER BY 1'),
     },
     resumo: {
@@ -265,7 +385,7 @@ app.get('/diarios.xls', exigirAuditor, (req, res) => {
   const dados = dadosDiarios(req.query);
   res.set({
     'Content-Type': 'application/vnd.ms-excel; charset=utf-8',
-    'Content-Disposition': `attachment; filename="diarios${dados.filtros.mes ? '-' + dados.filtros.mes : ''}.xls"`,
+    'Content-Disposition': `attachment; filename="diarios${dados.filtros.de ? '-' + dados.filtros.de + (dados.filtros.ate !== dados.filtros.de ? '_' + dados.filtros.ate : '') : ''}.xls"`,
   });
   res.send('﻿' + v.diariosExcel(dados));
 });
@@ -274,6 +394,8 @@ app.get('/diarios.xls', exigirAuditor, (req, res) => {
 app.get('/inconsistencias', exigirAuditor, (req, res) => {
   // Ao entrar sem filtros mostram-se as pendentes; "Todos" no filtro mostra tudo.
   const filtros = lerFiltros(req.query);
+  delete filtros.data;
+  Object.assign(filtros, lerPeriodo(req.query));
   if (!('estado' in req.query)) filtros.estado = 'pendente';
   res.send(v.incsPage(req.user, listarIncs(filtros), filtros, opcoesFiltro(null)));
 });
@@ -326,6 +448,77 @@ app.post('/inconsistencias/:id/estado', exigirAuditor, (req, res, next) => {
     );
   });
   res.redirect(`/inconsistencias/${inc.id}`);
+});
+
+// ---------- Extratos bancários e relatórios de pagamentos ----------
+const nomeUTF8 = (f) => Buffer.from(f.originalname, 'latin1').toString('utf8');
+
+function listarExtratos() {
+  return all(
+    `SELECT e.*, u.nome AS enviado_por, (SELECT COUNT(*) FROM extrato_linhas l WHERE l.extrato_id = e.id) AS n
+     FROM extratos e LEFT JOIN users u ON u.id = e.user_id ORDER BY e.id DESC`,
+  );
+}
+
+const ficheirosExtratos = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 12 } }).array('ficheiros', 12);
+
+app.get('/extratos', exigirAuditor, (req, res) => res.send(v.extratosPage(req.user, listarExtratos(), null)));
+app.post('/extratos', exigirAuditor, (req, res, next) => {
+  ficheirosExtratos(req, res, (erroUpload) => {
+    if (erroUpload) return res.status(400).send(v.extratosPage(req.user, listarExtratos(), [{ nome: 'Carregamento', erro: 'Não foi possível receber os ficheiros (máximo 10 MB cada, até 12 ficheiros).' }]));
+    try {
+      const resultados = (req.files || []).map((f) => {
+        const nome = nomeUTF8(f);
+        try {
+          const lido = lerExtrato(f.buffer, String(req.body?.tipo || ''));
+          return { nome, tipo: lido.tipo, colunas: lido.colunas, debitos: lido.debitos, de: lido.de, ate: lido.ate, total: lido.linhas.length, ...guardarExtrato(nome, lido, req.user.id) };
+        } catch (erro) {
+          if (!(erro instanceof ErroExtrato)) throw erro;
+          return { nome, erro: erro.message };
+        }
+      });
+      if (!resultados.length) resultados.push({ nome: 'Carregamento', erro: 'Escolha pelo menos um ficheiro.' });
+      res.status(resultados.every((r) => r.erro) ? 400 : 200).send(v.extratosPage(req.user, listarExtratos(), resultados));
+    } catch (erro) {
+      next(erro);
+    }
+  });
+});
+app.get('/extratos/:id', exigirAuditor, (req, res, next) => {
+  const extrato = get('SELECT e.*, u.nome AS enviado_por FROM extratos e LEFT JOIN users u ON u.id = e.user_id WHERE e.id = ?', Number(req.params.id));
+  if (!extrato) return next();
+  const linhas = all('SELECT * FROM extrato_linhas WHERE extrato_id = ? ORDER BY data, n, id LIMIT 5000', extrato.id);
+  res.send(v.extratoPage(req.user, extrato, linhas, usoDasLinhas()));
+});
+app.post('/extratos/:id/apagar', exigirAuditor, (req, res, next) => {
+  if (!get('SELECT 1 AS x FROM extratos WHERE id = ?', Number(req.params.id))) return next();
+  run('DELETE FROM extratos WHERE id = ?', Number(req.params.id));
+  res.redirect('/extratos');
+});
+
+// Associação feita à mão: um movimento do diário e uma linha de extrato com o mesmo valor.
+const voltaAoFecho = (req) => {
+  const data = String(req.body?.data || '');
+  const meio = /^[a-z0-9-]{1,20}$/.test(String(req.body?.meio || '')) ? req.body.meio : 'geral';
+  return RE_DATA.test(data) ? `/fechos/${data}#meios:${meio}` : '/extratos';
+};
+app.post('/extratos/associar', exigirAuditor, (req, res) => {
+  const data = String(req.body?.data || '');
+  const cent = Number(req.body?.valor_cent);
+  const linha = get('SELECT * FROM extrato_linhas WHERE id = ?', Number(req.body?.linha_id));
+  const doc = String(req.body?.doc || '').slice(0, 60);
+  if (RE_DATA.test(data) && doc && Number.isInteger(cent) && linha && centimos(linha.valor) === cent) {
+    run(
+      `INSERT INTO extrato_associacoes (data, doc, valor_cent, linha_id, criado_em, user_id) VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(data, doc, valor_cent) DO UPDATE SET linha_id = excluded.linha_id, criado_em = excluded.criado_em, user_id = excluded.user_id`,
+      data, doc, cent, linha.id, agora(), req.user.id,
+    );
+  }
+  res.redirect(voltaAoFecho(req));
+});
+app.post('/extratos/desassociar', exigirAuditor, (req, res) => {
+  run('DELETE FROM extrato_associacoes WHERE data = ? AND doc = ? AND valor_cent = ?', String(req.body?.data || ''), String(req.body?.doc || ''), Number(req.body?.valor_cent));
+  res.redirect(voltaAoFecho(req));
 });
 
 // ---------- Talões ----------
@@ -384,11 +577,22 @@ app.get('/taloes/meus', exigirLogin, (req, res) => {
 });
 
 app.get('/taloes', exigirAuditor, (req, res) => {
-  const data = RE_DATA.test(req.query.data || '') ? req.query.data : null;
-  const taloes = data
-    ? all(`${SQL_TALOES} WHERE t.data = ? ORDER BY t.hora, t.id`, data)
-    : all(`${SQL_TALOES} ORDER BY e.id DESC, t.id LIMIT 500`);
-  res.send(v.taloesPage(req.user, taloes, { data }));
+  const periodo = lerPeriodo(req.query);
+  const tipo = ['compra', 'fecho'].includes(req.query.tipo) ? req.query.tipo : '';
+  const cond = [];
+  const ps = [];
+  if (periodo.de) {
+    cond.push('t.data >= ? AND t.data <= ?');
+    ps.push(periodo.de, periodo.ate);
+  }
+  if (tipo) {
+    cond.push('t.tipo = ?');
+    ps.push(tipo);
+  }
+  const onde = cond.length ? `WHERE ${cond.join(' AND ')}` : '';
+  const taloes = all(`${SQL_TALOES} ${onde} ORDER BY ${periodo.de ? 't.data, t.hora, t.id' : 'e.id DESC, t.id LIMIT 500'}`, ...ps);
+  const dias = all('SELECT DISTINCT data AS x FROM taloes WHERE data IS NOT NULL ORDER BY 1').map((r) => r.x);
+  res.send(v.taloesPage(req.user, taloes, { ...periodo, tipo }, dias));
 });
 
 // Um rececionista só vê os seus envios e só os altera enquanto não os confirmar; depois disso, só o auditor.
@@ -517,6 +721,18 @@ app.post('/config/terminais', exigirAuditor, (req, res) => {
   if (get('SELECT 1 AS x FROM tpas WHERE numero = ?', numero)) return paginaTerminais(req, res, 'Esse terminal já existe.', 400);
   run('INSERT INTO tpas (numero, nome) VALUES (?, ?)', numero, String(req.body?.nome || '').trim().slice(0, 80));
   res.redirect('/config/terminais?ok=criado');
+});
+// Associa um terminal a mais uma caixa (a partir da página do fecho) e volta a cruzar tudo.
+app.post('/config/terminais/:id/associar', exigirAuditor, (req, res, next) => {
+  const tpa = get('SELECT * FROM tpas WHERE id = ?', Number(req.params.id));
+  if (!tpa) return next();
+  const caixa = String(req.body?.caixa || '');
+  if (get('SELECT 1 AS x FROM caixas WHERE codigo = ?', caixa)) {
+    run('INSERT OR IGNORE INTO tpa_caixas (tpa_id, caixa) VALUES (?, ?)', tpa.id, caixa);
+    reconciliarTudo();
+  }
+  const data = String(req.body?.data || '');
+  res.redirect(RE_DATA.test(data) ? `/fechos/${data}#meios:tpa` : '/config/terminais?ok=guardado');
 });
 app.post('/config/terminais/:id', exigirAuditor, (req, res, next) => {
   const tpa = get('SELECT * FROM tpas WHERE id = ?', Number(req.params.id));

@@ -50,6 +50,43 @@ CREATE TABLE IF NOT EXISTS faturas (
 );
 CREATE INDEX IF NOT EXISTS faturas_data ON faturas(data);
 
+-- Extratos bancários e relatórios de pagamentos (Booking.com, Stripe): o comprovativo das transferências.
+CREATE TABLE IF NOT EXISTS extratos (
+  id INTEGER PRIMARY KEY,
+  tipo TEXT NOT NULL CHECK (tipo IN ('banco', 'stripe', 'booking')),
+  nome_original TEXT NOT NULL,
+  criado_em TEXT NOT NULL,
+  user_id INTEGER REFERENCES users(id),
+  de TEXT, ate TEXT, colunas TEXT
+);
+CREATE TABLE IF NOT EXISTS extrato_linhas (
+  id INTEGER PRIMARY KEY,
+  extrato_id INTEGER NOT NULL REFERENCES extratos(id) ON DELETE CASCADE,
+  n INTEGER,
+  data TEXT NOT NULL,
+  descricao TEXT, valor REAL NOT NULL, saldo REAL,
+  categoria TEXT NOT NULL,           -- banco: transferencia | booking | stripe | saida; relatórios: detalhe | payout | outro
+  referencia TEXT, hospede TEXT, checkin TEXT, checkout TEXT,
+  grupo TEXT, grupo_data TEXT, liquido REAL, taxa REAL, convertido REAL,
+  chave TEXT
+);
+CREATE INDEX IF NOT EXISTS extrato_linhas_cat ON extrato_linhas(categoria, data);
+CREATE INDEX IF NOT EXISTS extrato_linhas_ext ON extrato_linhas(extrato_id);
+-- Associações feitas à mão pelo auditor entre um movimento do diário e uma linha de extrato.
+CREATE TABLE IF NOT EXISTS extrato_associacoes (
+  id INTEGER PRIMARY KEY,
+  data TEXT NOT NULL, doc TEXT NOT NULL, valor_cent INTEGER NOT NULL,
+  linha_id INTEGER NOT NULL REFERENCES extrato_linhas(id) ON DELETE CASCADE,
+  criado_em TEXT, user_id INTEGER,
+  UNIQUE (data, doc, valor_cent)
+);
+
+-- Contagem de notas e moedas feita pelo auditor, por dia (valor da denominação em cêntimos).
+CREATE TABLE IF NOT EXISTS contagens_numerario (
+  data TEXT NOT NULL, valor INTEGER NOT NULL, quantidade INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (data, valor)
+);
+
 -- Configuração.
 CREATE TABLE IF NOT EXISTS caixas (codigo TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS meios (codigo TEXT PRIMARY KEY, descricao TEXT, tpa INTEGER NOT NULL DEFAULT 0);
@@ -137,6 +174,10 @@ for (const f of ['saidas_lista', 'saidas_faturas', 'entradas_lista', 'entradas_f
   coluna('fechos', f, 'TEXT');
   coluna('fechos', `${f}_em`, 'TEXT');
 }
+
+coluna('extrato_linhas', 'convertido', 'REAL');
+coluna('fechos', 'contagem_por', 'INTEGER');
+coluna('fechos', 'contagem_em', 'TEXT');
 
 const stmts = new Map();
 function st(sql) {
