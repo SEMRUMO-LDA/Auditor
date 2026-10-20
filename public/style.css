@@ -230,19 +230,39 @@ form.linha input { margin: 0; min-width: 150px; }
 .botoes-grandes { margin: 1rem 0; }
 #previa img { width: 100%; border-radius: 10px; border: 1px solid var(--linha); margin-top: 0.5rem; }
 
-@media (max-width: 760px) {
+/* Botão do menu (hambúrguer): só aparece em ecrãs estreitos. */
+.hamburguer { display: none; }
+
+/* Telemóvel e tablet: o menu lateral passa a barra fixa no topo, com o menu num painel que o hambúrguer abre. */
+@media (max-width: 900px) {
   body.com-menu { padding-left: 0; }
-  body.com-menu .topo { position: static; width: auto; flex-direction: row; flex-wrap: wrap; align-items: center; }
-  body.com-menu .marca { min-height: 0; padding: 0.6rem 1rem; }
-  body.com-menu .marca img { width: 118px; }
+  body.com-menu .topo { position: sticky; top: 0; bottom: auto; left: auto; width: auto; max-height: 100dvh; overflow-y: auto; flex-direction: row; flex-wrap: wrap; align-items: center; z-index: 30; }
+  .marca, body.com-menu .marca { flex: 1 1 auto; min-height: 0; padding: 0.55rem 1rem; }
+  .marca img, body.com-menu .marca img { width: 118px; }
   .marca-sub, .nav-rotulo, .barra { display: none; }
-  .topo nav { flex-direction: row; flex-wrap: wrap; flex: 1 1 100%; order: 3; padding: 0.4rem 0.5rem 0.6rem; overflow: visible; }
-  .topo nav a { min-height: 40px; padding: 0.4rem 0.7rem; }
-  .topo nav a.ativo::after { display: none; }
-  .conta { margin: 0 0 0 auto; padding: 0 1rem; border-top: 0; }
-  .conta-texto small { display: none; }
+  .hamburguer { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 52px; min-height: 52px; padding: 0; margin: 0; border: 0; border-radius: 0; background: transparent; color: #fff; }
+  .hamburguer:hover { background: #343b88; }
+  .hamburguer:focus-visible { outline: 2px solid #fff; outline-offset: -4px; }
+  .hamburguer .h-x, .menu-aberto .hamburguer .h-barras { display: none; }
+  .menu-aberto .hamburguer .h-x { display: inline; }
+  .topo nav, .topo .conta { display: none; }
+  .menu-aberto .topo nav { display: flex; flex: 1 1 100%; order: 3; padding: 0.5rem 0.75rem 0.75rem; overflow: visible; }
+  .menu-aberto .topo .conta { display: flex; flex: 1 1 100%; order: 4; margin: 0; padding: 0.9rem 1rem 1rem; }
+  .topo nav a { min-height: 48px; }
+  .conta { border-top: 1px solid var(--marinho-linha); }
   .envio { grid-template-columns: 1fr; }
   main { padding: 1rem 0.75rem 3rem; }
+  h1 { font-size: 1.6rem; }
+  /* o menu aberto tapa a página: sem deslizar por baixo dele */
+  body.menu-aberto { overflow: hidden; }
+}
+@media (max-width: 480px) {
+  .cartao { padding: 1rem; }
+  .cabecalho > .acoes, .acoes .botao, .acoes button { max-width: 100%; }
+  .filtros label { min-width: 0; flex: 1 1 calc(50% - var(--campo-folga)); }
+  .filtros > button, .filtros > .botao { flex: 1 1 100%; }
+  .indicadores { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .colunas { grid-template-columns: minmax(0, 1fr); }
 }
 
 [hidden] { display: none !important; }

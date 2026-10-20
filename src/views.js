@@ -92,7 +92,8 @@ function pagina(user, titulo, corpo, ativo = '') {
   <a class="marca" href="/" aria-label="Umbral · Auditoria de caixas"><img src="/umbral-logo-white.png" alt="Umbral" width="205" height="40"><span>Auditoria de caixas</span></a>
   ${user && h`<p class="marca-sub"><b>CAIXAS</b><span>Auditoria de fechos</span></p>
   <p class="nav-rotulo">Espaço de trabalho</p>`}
-  <nav>${nav}</nav>
+  ${user && h`<button type="button" class="hamburguer" aria-label="Abrir o menu" aria-expanded="false" aria-controls="menu-principal"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path class="h-barras" d="M4 6h16M4 12h16M4 18h16"/><path class="h-x" d="M6 6l12 12M18 6L6 18"/></svg></button>`}
+  <nav id="menu-principal">${nav}</nav>
   ${user && h`<div class="conta"><span class="marca-conta">${user.nome.trim().charAt(0).toUpperCase()}</span><div class="conta-texto"><a href="/conta">${user.nome}</a><small>${papel}</small></div><form method="post" action="/logout"><button class="link" title="Terminar sessão">Sair</button></form></div>`}
 </header>
 ${user && h`<div class="barra"><nav class="migalhas" aria-label="Localização"><span>Auditoria de caixas</span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg><strong>${titulo}</strong></nav><span class="pilula">${papel}</span></div>`}

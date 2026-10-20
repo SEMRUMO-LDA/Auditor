@@ -478,3 +478,24 @@ caixasValidar.forEach((caixa) => {
   });
 });
 window.addEventListener('pageshow', () => caixasValidar.forEach((c) => { c.disabled = false; })); // voltar atrás no browser
+
+// ----- Menu (hambúrguer) em ecrãs estreitos -----
+const botaoMenu = document.querySelector('.hamburguer');
+if (botaoMenu) {
+  const larguraMovel = window.matchMedia('(max-width: 900px)');
+  const definir = (aberto) => {
+    document.body.classList.toggle('menu-aberto', aberto);
+    botaoMenu.setAttribute('aria-expanded', String(aberto));
+    botaoMenu.setAttribute('aria-label', aberto ? 'Fechar o menu' : 'Abrir o menu');
+  };
+  botaoMenu.addEventListener('click', () => definir(!document.body.classList.contains('menu-aberto')));
+  document.querySelectorAll('#menu-principal a').forEach((a) => a.addEventListener('click', () => definir(false)));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && document.body.classList.contains('menu-aberto')) {
+      definir(false);
+      botaoMenu.focus();
+    }
+  });
+  // Ao passar a um ecrã largo (ou rodar o telemóvel) o menu volta a ser a barra lateral fixa.
+  larguraMovel.addEventListener('change', (e) => { if (!e.matches) definir(false); });
+}
