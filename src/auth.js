@@ -28,28 +28,28 @@ function lerCookie(req, nome) {
   return null;
 }
 
-export function iniciarSessao(req, res, userId) {
+export async function iniciarSessao(req, res, userId) {
   const token = crypto.randomBytes(32).toString('hex');
   const expira = new Date(Date.now() + DIAS_SESSAO * 86400e3);
-  run('INSERT INTO sessions (token_hash, user_id, expira_em) VALUES (?, ?, ?)', hashToken(token), userId, expira.toISOString());
+  await run('INSERT INTO sessions (token_hash, user_id, expira_em) VALUES (?, ?, ?)', hashToken(token), userId, expira.toISOString());
   res.cookie(COOKIE, token, { httpOnly: true, sameSite: 'lax', secure: req.secure, expires: expira });
 }
 
-export function terminarSessao(req, res) {
+export async function terminarSessao(req, res) {
   const token = lerCookie(req, COOKIE);
-  if (token) run('DELETE FROM sessions WHERE token_hash = ?', hashToken(token));
+  if (token) await run('DELETE FROM sessions WHERE token_hash = ?', hashToken(token));
   res.clearCookie(COOKIE);
 }
 
-export function terminarSessoesDe(userId) {
-  run('DELETE FROM sessions WHERE user_id = ?', userId);
+export async function terminarSessoesDe(userId) {
+  await run('DELETE FROM sessions WHERE user_id = ?', userId);
 }
 
-export function carregarUtilizador(req, res, next) {
+export async function carregarUtilizador(req, res, next) {
   const token = lerCookie(req, COOKIE);
   req.user = null;
   if (token) {
-    const u = get(
+    const u = await get(
       `SELECT u.id, u.username, u.nome, u.role FROM sessions s JOIN users u ON u.id = s.user_id
        WHERE s.token_hash = ? AND s.expira_em > ? AND u.ativo = 1`,
       hashToken(token),

@@ -155,7 +155,7 @@ button.link:hover { background: none; }
 
 .tabela-wrap { overflow-x: auto; background: var(--superficie); border: 1px solid var(--linha); border-radius: 12px; }
 table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-th, td { padding: 0.5rem 0.7rem; text-align: left; border-bottom: 1px solid var(--linha); vertical-align: top; }
+th, td { padding: 0.5rem 0.7rem; text-align: left; border-bottom: 1px solid var(--linha); vertical-align: middle; }
 th { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--marinho); background: var(--info-fundo); white-space: nowrap; }
 tbody tr:last-child td { border-bottom: none; }
 tr.destaque td { background: var(--aviso-fundo); }
@@ -173,7 +173,7 @@ form.linha input { margin: 0; min-width: 150px; }
 .indicadores { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.75rem; margin: 1rem 0; }
 .indicadores > div { background: var(--superficie); border: 1px solid var(--linha); border-top: 3px solid var(--turquesa); border-radius: 12px; padding: 0.75rem 0.9rem; }
 .indicadores span { display: block; font-size: 0.8rem; color: var(--suave); }
-.indicadores strong { color: var(--marinho); font: 600 1.4rem var(--titulos); font-variant-numeric: tabular-nums; }
+.indicadores strong { color: var(--marinho); font: 600 1.15rem var(--titulos); font-variant-numeric: tabular-nums; }
 .indicadores .alerta { border-color: var(--erro); border-top-color: var(--coral); }
 .indicadores .alerta strong { color: var(--erro); }
 
@@ -184,6 +184,21 @@ form.linha input { margin: 0; min-width: 150px; }
 .filtros { display: flex; gap: var(--campo-folga); flex-wrap: wrap; align-items: flex-end; margin: 0.5rem 0 0.75rem; }
 .filtros label { margin: 0; min-width: 130px; }
 .filtros > a { display: inline-flex; align-items: center; min-height: var(--campo-altura); }
+/* Filtros dos Diários: tudo numa linha em ecrãs largos; abaixo disso voltam a quebrar linha. */
+@media (min-width: 1400px) {
+  .filtros.uma-linha { flex-wrap: nowrap; gap: 0.6rem; }
+  .filtros.uma-linha > label, .filtros.uma-linha > .periodo { flex: 1 1 0; min-width: 0; }
+  .filtros.uma-linha > .periodo { flex-grow: 1.4; }
+  .filtros.uma-linha > label:has([name="serie"]) { flex-grow: 0.7; }
+  .filtros.uma-linha > label:has([name="caixa"]) { flex-grow: 1.1; }
+  .filtros.uma-linha > label:has([name="faturacao"]) { flex-grow: 0.9; }
+  .filtros.uma-linha > label:has([name="operador"]), .filtros.uma-linha > label:has([name="unidade"]) { flex-grow: 1.2; }
+  .filtros.uma-linha .periodo label { min-width: 0; }
+  .filtros.uma-linha .periodo-botao { min-width: 0; }
+  .filtros.uma-linha .periodo-botao span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .filtros.uma-linha select { padding-right: 2rem; text-overflow: ellipsis; white-space: nowrap; }
+  .filtros.uma-linha > button, .filtros.uma-linha > a { flex: 0 0 auto; }
+}
 
 .meta { display: flex; gap: 1.5rem; flex-wrap: wrap; margin: 0.75rem 0; }
 .meta dt { font-size: 0.78rem; color: var(--suave); text-transform: uppercase; }
@@ -193,7 +208,9 @@ form.linha input { margin: 0; min-width: 150px; }
 .historico li { border-left: 3px solid var(--linha); padding: 0.3rem 0 0.3rem 0.8rem; margin: 0.6rem 0; }
 .historico li.estado { border-left-color: var(--coral); }
 .historico p { margin: 0.15rem 0 0; white-space: pre-wrap; }
-.estados { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--linha); }
+.estados { display: flex; gap: 0.25rem 1.5rem; align-items: center; flex-wrap: wrap; margin: 1rem 0; padding: 0; border: 0; min-width: 0; }
+.estados legend { padding: 0; margin: 0 0 0.4rem; font-size: 0.85rem; font-weight: 500; color: var(--suave); }
+.estados label { margin: 0; color: var(--texto); font-size: 0.9rem; cursor: pointer; }
 
 .fotos { display: flex; gap: 0.75rem; flex-wrap: wrap; }
 .fotos img { height: 160px; border: 1px solid var(--linha); border-radius: 6px; }
@@ -231,7 +248,8 @@ form.linha input { margin: 0; min-width: 150px; }
 [hidden] { display: none !important; }
 
 label.curto { max-width: 320px; }
-td select, td input:not([type="checkbox"]) { margin: 0; }
+/* Campos dentro das tabelas sem a margem superior dos formulários, para ficarem centrados na linha (a lista de :not iguala a prioridade da regra global). */
+td select, td input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]) { margin: 0; }
 
 /* Diários: as cores seguem a folha de cálculo original (rosa para reservas com nota de crédito, laranja e azul a alternar por dia). */
 table.diarios td { white-space: nowrap; }
@@ -246,6 +264,9 @@ tr.nc td.dia-0, tr.nc td.dia-1, tr.nc td.dia-2 { background: #e9a8e0; }
 .legenda { display: flex; align-items: center; gap: 0.4rem; margin: 0.75rem 0 0.4rem; }
 .amostra { display: inline-block; width: 1rem; height: 1rem; border-radius: 3px; }
 .amostra.nc { background: #e9a8e0; }
+.amostra.pf { background: #fff2cc; border: 1px solid #e6cf8a; vertical-align: -0.2em; }
+tr.por-faturar td, tr.por-faturar td.dia-0, tr.por-faturar td.dia-1, tr.por-faturar td.dia-2 { background: #fff2cc; }
+.indicadores .por-faturar { border-top-color: #e6b800; background: #fffaea; }
 .tabela-wrap.estreita { max-width: 520px; margin-bottom: 0.5rem; }
 
 /* Contagem de numerário */
@@ -391,10 +412,6 @@ table.meios .submetodo::before { content: ""; position: absolute; left: -0.9rem;
 .subpainel > h3 { margin-top: 1.75rem; }
 .subpainel > h3:first-child, .subpainel > .tabela-wrap:first-child + h3 { margin-top: 1.5rem; }
 .tabela-wrap.estreita { max-width: 640px; }
-td button[data-ir-subaba] { min-height: 32px; padding: 0 0.9rem; font-size: 0.8rem; }
-.resumo-lista { margin: 0; padding-left: 1.1rem; }
-.resumo-lista li { margin: 0.1rem 0; }
-td button[data-ir-subaba] { white-space: nowrap; }
 .meio-sub { display: flex; align-items: center; gap: 0.6rem; margin: 1.1rem 0 0; font: 600 0.95rem var(--titulos); color: var(--marinho); }
 td form.linha select { min-width: 150px; }
 td form.linha button { min-height: 34px; padding: 0 0.9rem; font-size: 0.8rem; }
@@ -414,3 +431,29 @@ table.matriz td.val.nd { color: var(--suave); }
 .indicadores .certo span { color: var(--ok); font-weight: 600; }
 .indicadores .certo strong { color: var(--ok); }
 .caixa-correta { margin: 0 0 1rem; font-weight: 500; }
+
+/* Fechos: validação dos valores pelo auditor. O total do diário só fica em destaque quando todos estão validados. */
+form[data-validar] { margin: 0; }
+.valida { display: inline-flex; align-items: center; justify-content: flex-end; gap: 0; margin: 0; color: var(--texto); font-size: inherit; font-weight: 400; cursor: pointer; }
+.valida input { cursor: pointer; }
+td.validado .valida span { color: var(--ok); font-weight: 600; }
+td.total-fecho small { display: block; margin-top: 0.1rem; font-size: 0.75rem; }
+td.total-fecho.valido { background: var(--ok-fundo); box-shadow: inset 3px 0 0 var(--turquesa); }
+td.total-fecho.valido strong { color: var(--ok); font-size: 1.05rem; }
+td.total-fecho.valido small { color: var(--ok); font-weight: 600; }
+.visto { display: inline-flex; align-items: center; justify-content: center; width: 1.2rem; height: 1.2rem; margin-right: 0.2rem; border-radius: 50%; background: var(--ok); color: #fff; font-size: 0.8rem; line-height: 1; }
+/* Validação do auditor na página do fecho: o total do diário e o cartão de cada meio. */
+.indicadores .valido-auditor { border-color: var(--turquesa); background: var(--ok-fundo); }
+.indicadores .valido-auditor span { color: var(--ok); font-weight: 600; }
+.indicadores .valido-auditor strong { color: var(--ok); }
+.indicadores .valida-card.validado { border-color: var(--turquesa); background: var(--ok-fundo); }
+.indicadores .valida-card.validado span { color: var(--ok); font-weight: 600; }
+.indicadores .valida-card label.valida span { display: inline; color: var(--texto); font-size: 0.95rem; font-weight: 500; }
+.indicadores .valida-card.validado label.valida span { color: var(--ok); font-weight: 600; }
+.indicadores .valida-card form { margin-top: 0.35rem; }
+table.meios td.validado .valida span { color: var(--ok); font-weight: 600; }
+table.meios td .valida { justify-content: flex-start; }
+/* Validação automática (TPA comprovado por talões): caixa bloqueada e etiqueta "auto". */
+.valida.auto { cursor: default; }
+.valida.auto input { cursor: default; }
+.auto-tag { margin-left: 0.4rem; padding: 0.05rem 0.4rem; border-radius: 999px; background: var(--ok-fundo); color: var(--ok); font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }

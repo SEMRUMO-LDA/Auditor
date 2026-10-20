@@ -8,7 +8,7 @@ const euros = (c) => (c / 100).toLocaleString('pt-PT', { minimumFractionDigits: 
 
 export const chaveDoMeio = (tipo) => String(tipo).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'meio';
 
-// movimentos: linhas do diário; faturas: linhas do relatório de faturas; taloes: talões de compra confirmados;
+// movimentos: linhas do diário; faturas: linhas do relatório de faturas; taloes: talões de compra (confirmados ou ainda por confirmar);
 // numerario: { existe, contado, esperado } (contagem de notas e moedas, em cêntimos).
 export function analisarMeios({ meios, movimentos, faturas, taloes, numerario, temFaturas, temDiario = true, terminais = new Map(), bancario = null }) {
   const tipoDoDoc = new Map();

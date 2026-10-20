@@ -219,11 +219,6 @@ document.querySelectorAll('[data-subabas]').forEach((barra) => {
       ativar(seguinte.dataset.subaba);
     });
   });
-  // Botões "Ver comprovativos" do resumo geral.
-  raiz.querySelectorAll('[data-ir-subaba]').forEach((b) => b.addEventListener('click', () => {
-    ativar(b.dataset.irSubaba);
-    barra.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  }));
   const [base, sub] = location.hash.slice(1).split(':');
   ativar(base === pai && nomes.includes(sub) ? sub : nomes[0], false);
 });
@@ -471,3 +466,15 @@ function iniciarPeriodo(raiz) {
   texto.textContent = rotulo();
 }
 document.querySelectorAll('[data-periodo]').forEach(iniciarPeriodo);
+
+// ----- Fechos: marcar a caixa de um valor valida-o (grava logo, sem botão) -----
+// Enquanto a página recarrega as caixas ficam bloqueadas, para que um segundo clique não se perca.
+const caixasValidar = document.querySelectorAll('form[data-validar] input[type="checkbox"]');
+caixasValidar.forEach((caixa) => {
+  caixa.addEventListener('change', () => {
+    if (caixa.form.elements.hash) caixa.form.elements.hash.value = location.hash; // volta ao mesmo separador
+    caixa.form.requestSubmit();
+    caixasValidar.forEach((c) => { c.disabled = true; });
+  });
+});
+window.addEventListener('pageshow', () => caixasValidar.forEach((c) => { c.disabled = false; })); // voltar atrás no browser

@@ -14,10 +14,10 @@ const ficheiros = fs
   .map((f) => ({ nome: f, buffer: fs.readFileSync(path.join(pasta, f)) }));
 
 try {
-  const { data, ficheiros: lidos } = importar(ficheiros, null);
+  const { data, ficheiros: lidos } = await importar(ficheiros, null);
   console.log(`Dia ${data.split('-').reverse().join('/')} carregado a partir de ${pasta}`);
   for (const f of lidos) console.log(`  ${f.descricao.padEnd(22)} ${f.nome}`);
-  const porGravidade = all('SELECT gravidade, COUNT(*) AS n FROM inconsistencias WHERE data = ? AND ativa = 1 GROUP BY gravidade', data);
+  const porGravidade = await all('SELECT gravidade, COUNT(*) AS n FROM inconsistencias WHERE data = ? AND ativa = 1 GROUP BY gravidade', data);
   console.log(`Inconsistências: ${porGravidade.map((g) => `${g.n} ${g.gravidade}`).join(', ') || 'nenhuma'}`);
 } catch (erro) {
   if (!(erro instanceof ErroFicheiro)) throw erro;

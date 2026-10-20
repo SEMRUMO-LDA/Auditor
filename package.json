@@ -3,18 +3,21 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Auditoria de fechos de caixa: cruza o diário de caixa e as faturas do PMS com os talões TPA.",
+  "description": "Auditoria de fechos de caixa: cruza o diário de caixa e as faturas do PMS com os talões TPA. Base de dados Postgres (Supabase).",
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning server.js",
     "importar": "node --disable-warning=ExperimentalWarning importar.js",
-    "test": "node --disable-warning=ExperimentalWarning --test"
+    "test": "node --disable-warning=ExperimentalWarning --test",
+    "migrar": "node --disable-warning=ExperimentalWarning scripts/migrar-sqlite.js"
   },
   "engines": {
     "node": ">=22.13"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "latest",
+    "@electric-sql/pglite": "^0.5.10",
     "express": "^5.1.0",
-    "multer": "^2.0.0"
+    "multer": "^2.0.0",
+    "pg": "^8.23.1"
   }
 }

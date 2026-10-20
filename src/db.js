@@ -1,213 +1,152 @@
-import { DatabaseSync } from 'node:sqlite';
+// Base de dados: Postgres.
+//  - Com DATABASE_URL, liga ao Postgres do Supabase (ou a qualquer Postgres).
+//  - Sem DATABASE_URL, usa um Postgres local embebido (PGlite), na pasta data/pglite. O SQL é o mesmo nos dois.
+// Todas as funções são assíncronas. O SQL usa "?" como marcador de parâmetros (convertido para $1, $2...).
 import fs from 'node:fs';
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { ESQUEMA, SEGURANCA } from './esquema.js';
 
 export const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(import.meta.dirname, '..', 'data'));
-export const UPLOAD_DIR = path.join(DATA_DIR, 'taloes');
+export const UPLOAD_DIR = path.join(DATA_DIR, 'taloes'); // as fotografias dos talões continuam em ficheiros locais
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
-const db = new DatabaseSync(path.join(DATA_DIR, 'caixas.db'));
-db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+const URL_BD = (process.env.DATABASE_URL || '').trim();
+export const DESTINO = URL_BD ? 'postgres' : 'local';
 
-db.exec(`
-CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY,
-  username TEXT NOT NULL UNIQUE COLLATE NOCASE,
-  nome TEXT NOT NULL,
-  pass_hash TEXT NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('auditor', 'rececionista')),
-  ativo INTEGER NOT NULL DEFAULT 1,
-  criado_em TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS sessions (
-  token_hash TEXT PRIMARY KEY,
-  user_id INTEGER NOT NULL REFERENCES users(id),
-  expira_em TEXT NOT NULL
-);
+class ErroBaseDeDados extends Error {}
 
--- Um fecho por dia, com as exportações do PMS.
-CREATE TABLE IF NOT EXISTS fechos (
-  data TEXT PRIMARY KEY,
-  diario_ficheiro TEXT, diario_em TEXT, diario_por INTEGER,
-  faturas_ficheiro TEXT, faturas_em TEXT, faturas_por INTEGER,
-  total_declarado REAL
-);
-CREATE TABLE IF NOT EXISTS resumo_diario (
-  data TEXT NOT NULL, tipo TEXT NOT NULL, descricao TEXT, valor REAL NOT NULL,
-  PRIMARY KEY (data, tipo)
-);
-CREATE TABLE IF NOT EXISTS movimentos (
-  id INTEGER PRIMARY KEY,
-  data TEXT NOT NULL, utilizador TEXT, secao TEXT, tipo TEXT, tipo_desc TEXT, hora TEXT,
-  doc TEXT, obs TEXT, quarto TEXT, nome TEXT, valor REAL NOT NULL, caixa TEXT, motivo TEXT,
-  total_utilizador REAL
-);
-CREATE INDEX IF NOT EXISTS movimentos_data ON movimentos(data);
-CREATE TABLE IF NOT EXISTS faturas (
-  id INTEGER PRIMARY KEY,
-  data TEXT NOT NULL, hotel TEXT, reserva TEXT, quarto TEXT, hospede TEXT,
-  checkin TEXT, checkout TEXT, total_reserva REAL, doc TEXT, valor REAL NOT NULL, tipo TEXT, info TEXT
-);
-CREATE INDEX IF NOT EXISTS faturas_data ON faturas(data);
+function falhar(mensagem, causa) {
+  const erro = new ErroBaseDeDados(mensagem);
+  erro.cause = causa;
+  console.error(`\nErro na base de dados: ${mensagem}\n`);
+  process.exit(1);
+}
 
--- Extratos bancários e relatórios de pagamentos (Booking.com, Stripe): o comprovativo das transferências.
-CREATE TABLE IF NOT EXISTS extratos (
-  id INTEGER PRIMARY KEY,
-  tipo TEXT NOT NULL CHECK (tipo IN ('banco', 'stripe', 'booking')),
-  nome_original TEXT NOT NULL,
-  criado_em TEXT NOT NULL,
-  user_id INTEGER REFERENCES users(id),
-  de TEXT, ate TEXT, colunas TEXT
-);
-CREATE TABLE IF NOT EXISTS extrato_linhas (
-  id INTEGER PRIMARY KEY,
-  extrato_id INTEGER NOT NULL REFERENCES extratos(id) ON DELETE CASCADE,
-  n INTEGER,
-  data TEXT NOT NULL,
-  descricao TEXT, valor REAL NOT NULL, saldo REAL,
-  categoria TEXT NOT NULL,           -- banco: transferencia | booking | stripe | saida; relatórios: detalhe | payout | outro
-  referencia TEXT, hospede TEXT, checkin TEXT, checkout TEXT,
-  grupo TEXT, grupo_data TEXT, liquido REAL, taxa REAL, convertido REAL,
-  chave TEXT
-);
-CREATE INDEX IF NOT EXISTS extrato_linhas_cat ON extrato_linhas(categoria, data);
-CREATE INDEX IF NOT EXISTS extrato_linhas_ext ON extrato_linhas(extrato_id);
--- Associações feitas à mão pelo auditor entre um movimento do diário e uma linha de extrato.
-CREATE TABLE IF NOT EXISTS extrato_associacoes (
-  id INTEGER PRIMARY KEY,
-  data TEXT NOT NULL, doc TEXT NOT NULL, valor_cent INTEGER NOT NULL,
-  linha_id INTEGER NOT NULL REFERENCES extrato_linhas(id) ON DELETE CASCADE,
-  criado_em TEXT, user_id INTEGER,
-  UNIQUE (data, doc, valor_cent)
-);
-
--- Contagem de notas e moedas feita pelo auditor, por dia (valor da denominação em cêntimos).
-CREATE TABLE IF NOT EXISTS contagens_numerario (
-  data TEXT NOT NULL, valor INTEGER NOT NULL, quantidade INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (data, valor)
-);
-
--- Configuração.
-CREATE TABLE IF NOT EXISTS caixas (codigo TEXT PRIMARY KEY);
-CREATE TABLE IF NOT EXISTS meios (codigo TEXT PRIMARY KEY, descricao TEXT, tpa INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE IF NOT EXISTS tpas (id INTEGER PRIMARY KEY, numero TEXT NOT NULL UNIQUE, nome TEXT);
--- Um TPA pode servir várias unidades (caixas) e uma unidade pode ter vários TPA.
-CREATE TABLE IF NOT EXISTS tpa_caixas (
-  tpa_id INTEGER NOT NULL REFERENCES tpas(id) ON DELETE CASCADE,
-  caixa TEXT NOT NULL,
-  PRIMARY KEY (tpa_id, caixa)
-);
-
--- Um envio é uma fotografia (ou PDF); pode conter vários talões.
-CREATE TABLE IF NOT EXISTS envios (
-  id INTEGER PRIMARY KEY,
-  user_id INTEGER NOT NULL REFERENCES users(id),
-  ficheiro TEXT NOT NULL, mime TEXT NOT NULL, nome_original TEXT,
-  criado_em TEXT NOT NULL,
-  estado TEXT NOT NULL DEFAULT 'rascunho' CHECK (estado IN ('rascunho', 'confirmado')),
-  confirmado_em TEXT, confirmado_por INTEGER,
-  leitura_json TEXT, leitura_erro TEXT
-);
-CREATE TABLE IF NOT EXISTS taloes (
-  id INTEGER PRIMARY KEY,
-  envio_id INTEGER NOT NULL REFERENCES envios(id) ON DELETE CASCADE,
-  tipo TEXT NOT NULL CHECK (tipo IN ('compra', 'fecho')),
-  tpa TEXT, data TEXT, hora TEXT, valor REAL, cartao TEXT, ultimos4 TEXT,
-  reservas TEXT NOT NULL DEFAULT '',
-  reserva_lida TEXT NOT NULL DEFAULT '',
-  reserva_origem TEXT NOT NULL DEFAULT '',
-  duvidoso INTEGER NOT NULL DEFAULT 0,
-  doc_associado TEXT
-);
-CREATE INDEX IF NOT EXISTS taloes_data ON taloes(data);
-
-CREATE TABLE IF NOT EXISTS inconsistencias (
-  id INTEGER PRIMARY KEY,
-  data TEXT NOT NULL, tipo TEXT NOT NULL, chave TEXT NOT NULL,
-  gravidade TEXT NOT NULL, titulo TEXT NOT NULL, detalhe_json TEXT NOT NULL,
-  utilizador TEXT, caixa TEXT, valor REAL,
-  estado TEXT NOT NULL DEFAULT 'pendente' CHECK (estado IN ('pendente', 'justificada', 'resolvida')),
-  ativa INTEGER NOT NULL DEFAULT 1,
-  criada_em TEXT NOT NULL, atualizada_em TEXT NOT NULL,
-  UNIQUE (data, tipo, chave)
-);
--- Notas e mudanças de estado: só se acrescenta, nunca se altera nem apaga.
-CREATE TABLE IF NOT EXISTS historico (
-  id INTEGER PRIMARY KEY,
-  inconsistencia_id INTEGER NOT NULL REFERENCES inconsistencias(id) ON DELETE CASCADE,
-  user_id INTEGER NOT NULL REFERENCES users(id),
-  quando TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('nota', 'estado')),
-  texto TEXT, estado_de TEXT, estado_para TEXT
-);
-`);
-
-db.exec(`
--- Listas de saídas e de entradas do dia (uma linha por quarto) e todas as faturas dessas reservas.
-CREATE TABLE IF NOT EXISTS reservas (
-  id INTEGER PRIMARY KEY,
-  data TEXT NOT NULL, lado TEXT NOT NULL CHECK (lado IN ('saida', 'entrada')),
-  reserva TEXT NOT NULL, unidade TEXT, hospede TEXT, checkin TEXT, checkout TEXT, status TEXT,
-  pax INTEGER, total REAL, agencia TEXT, mercado TEXT, canal TEXT, info TEXT, criada_por TEXT
-);
-CREATE INDEX IF NOT EXISTS reservas_data ON reservas(data, lado);
-CREATE TABLE IF NOT EXISTS faturas_reserva (
-  id INTEGER PRIMARY KEY,
-  data TEXT NOT NULL, lado TEXT NOT NULL,
-  reserva TEXT NOT NULL, quarto TEXT, doc TEXT, doc_data TEXT, valor REAL NOT NULL, tipo TEXT
-);
-CREATE INDEX IF NOT EXISTS faturas_reserva_data ON faturas_reserva(data, lado);
--- Como se espera que cada agência seja faturada: 'imediata' (até à estadia), 'prazo' (dias depois da saída)
--- ou 'agencia' (faturada à parte, fora deste relatório).
-CREATE TABLE IF NOT EXISTS agencias (nome TEXT PRIMARY KEY, regra TEXT NOT NULL CHECK (regra IN ('imediata', 'prazo', 'agencia')));
-CREATE TABLE IF NOT EXISTS config (chave TEXT PRIMARY KEY, valor TEXT NOT NULL);
-`);
-
-// Colunas acrescentadas depois da primeira versão.
-function coluna(tabela, nome, tipo) {
-  if (!db.prepare(`PRAGMA table_info(${tabela})`).all().some((c) => c.name === nome)) {
-    db.exec(`ALTER TABLE ${tabela} ADD COLUMN ${nome} ${tipo}`);
+// ---------- Ligação ----------
+// Cada destino expõe: query(sql, params) -> { rows, rowCount }, exec(sql) para vários comandos, transaction(fn) e fechar().
+async function ligarPostgres() {
+  if (/\[[^\]]*(PASSWORD|PALAVRA|SENHA)[^\]]*\]/i.test(URL_BD)) {
+    falhar('O DATABASE_URL ainda tem o marcador [YOUR-PASSWORD]. Substitua-o pela palavra-passe da base de dados do Supabase (sem os parênteses retos).');
   }
-}
-coluna('movimentos', 'doc_data', 'TEXT');
-for (const f of ['saidas_lista', 'saidas_faturas', 'entradas_lista', 'entradas_faturas']) {
-  coluna('fechos', f, 'TEXT');
-  coluna('fechos', `${f}_em`, 'TEXT');
+  const { default: pg } = await import('pg');
+  pg.types.setTypeParser(20, Number); // bigint (contagens, somas de inteiros) como número, como no SQLite
+  pg.types.setTypeParser(1700, Number); // numeric
+  const local = /@(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(URL_BD);
+  // O Supabase exige SSL. Por omissão não se verifica o certificado (DATABASE_SSL_VERIFICAR=1 para verificar).
+  const ssl = process.env.DATABASE_SSL === 'off' || local ? false : { rejectUnauthorized: process.env.DATABASE_SSL_VERIFICAR === '1' };
+  const pool = new pg.Pool({
+    connectionString: URL_BD, ssl, max: Number(process.env.DATABASE_POOL) || 8,
+    connectionTimeoutMillis: 15000, idleTimeoutMillis: 30000, allowExitOnIdle: false,
+  });
+  pool.on('error', (e) => console.error('Erro numa ligação inativa à base de dados:', e.message));
+  return {
+    query: (sql, params) => pool.query(sql, params),
+    exec: (sql) => pool.query(sql),
+    async transaction(fn) {
+      const c = await pool.connect();
+      try {
+        await c.query('BEGIN');
+        const r = await fn(c);
+        await c.query('COMMIT');
+        return r;
+      } catch (e) {
+        await c.query('ROLLBACK').catch(() => {});
+        throw e;
+      } finally {
+        c.release();
+      }
+    },
+    fechar: () => pool.end(),
+  };
 }
 
-coluna('extrato_linhas', 'convertido', 'REAL');
-coluna('fechos', 'contagem_por', 'INTEGER');
-coluna('fechos', 'contagem_em', 'TEXT');
-
-const stmts = new Map();
-function st(sql) {
-  let s = stmts.get(sql);
-  if (!s) stmts.set(sql, (s = db.prepare(sql)));
-  return s;
+async function ligarLocal() {
+  const { PGlite, types } = await import('@electric-sql/pglite');
+  const pasta = path.join(DATA_DIR, 'pglite');
+  const bd = await PGlite.create(process.env.PGLITE_MEMORIA === '1' ? undefined : pasta, {
+    parsers: { [types.INT8]: (v) => Number(v), [types.NUMERIC]: (v) => Number(v) },
+  });
+  const norm = (r) => ({ rows: r.rows, rowCount: r.affectedRows ?? r.rows.length });
+  return {
+    query: async (sql, params) => norm(await bd.query(sql, params)),
+    exec: (sql) => bd.exec(sql),
+    transaction: (fn) => bd.transaction((t) => fn({ query: async (sql, params) => norm(await t.query(sql, params)) })),
+    fechar: () => bd.close(),
+  };
 }
+
+const destino = URL_BD ? await ligarPostgres() : await ligarLocal();
+
+// ---------- Consultas ----------
+// Dentro de tx(), as consultas seguem sozinhas pela ligação da transação (mesmo noutras funções chamadas lá de dentro).
+const contexto = new AsyncLocalStorage();
+// Para medir o desempenho: com DEBUG_SQL=1, cada pedido regista quantas consultas fez e quanto tempo esperou pela base de dados.
+const medicao = new AsyncLocalStorage();
+export const medirPedido = (fn) => medicao.run({ consultas: 0, ms: 0 }, fn);
+export const medicaoAtual = () => medicao.getStore();
+
+const paraPostgres = (sql) => {
+  let n = 0;
+  return sql.replace(/\?/g, () => `$${++n}`);
+};
 const limpar = (ps) => ps.map((p) => (p === undefined ? null : p));
 
-export const all = (sql, ...ps) => st(sql).all(...limpar(ps));
-export const get = (sql, ...ps) => st(sql).get(...limpar(ps));
-export const run = (sql, ...ps) => st(sql).run(...limpar(ps));
+// Só para testes: DEBUG_LATENCIA_MS=30 simula a viagem pela rede até uma base de dados remota.
+const LATENCIA_MS = Number(process.env.DEBUG_LATENCIA_MS) || 0;
 
-export function tx(fn) {
-  db.exec('BEGIN');
+async function consultar(sql, ps) {
+  if (LATENCIA_MS) await new Promise((r) => setTimeout(r, LATENCIA_MS));
+  const ligacao = contexto.getStore() ?? destino;
+  const m = medicao.getStore();
+  if (m && process.env.DEBUG_SQL === '2') console.log(`   SQL> ${sql.replace(/\s+/g, ' ').slice(0, 110)}`);
+  const inicio = m ? performance.now() : 0;
   try {
-    const r = fn();
-    db.exec('COMMIT');
-    return r;
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e;
+    return await ligacao.query(paraPostgres(sql), limpar(ps));
+  } finally {
+    if (m) {
+      m.consultas++;
+      m.ms += performance.now() - inicio;
+    }
   }
+}
+
+export const all = async (sql, ...ps) => (await consultar(sql, ps)).rows;
+export const get = async (sql, ...ps) => (await consultar(sql, ps)).rows[0];
+export const run = async (sql, ...ps) => {
+  const r = await consultar(sql, ps);
+  return { changes: r.rowCount ?? 0 };
+};
+// INSERT numa tabela com coluna "id": devolve o id criado.
+export const inserir = async (sql, ...ps) => (await get(`${sql} RETURNING id`, ...ps)).id;
+
+export async function tx(fn) {
+  if (contexto.getStore()) return fn(); // já dentro de uma transação: junta-se a ela
+  return destino.transaction((ligacao) => contexto.run(ligacao, fn));
 }
 
 export const agora = () => new Date().toISOString();
 
-export function config(chave, omissao) {
-  return get('SELECT valor FROM config WHERE chave = ?', chave)?.valor ?? omissao;
+export async function config(chave, omissao) {
+  return (await get('SELECT valor FROM config WHERE chave = ?', chave))?.valor ?? omissao;
 }
-export function guardarConfig(chave, valor) {
-  run('INSERT INTO config (chave, valor) VALUES (?, ?) ON CONFLICT(chave) DO UPDATE SET valor = excluded.valor', chave, String(valor));
+export async function guardarConfig(chave, valor) {
+  await run('INSERT INTO config (chave, valor) VALUES (?, ?) ON CONFLICT(chave) DO UPDATE SET valor = excluded.valor', chave, String(valor));
+}
+
+export const fecharBaseDeDados = () => destino.fechar();
+
+// ---------- Esquema ----------
+try {
+  await destino.exec(ESQUEMA);
+  await destino.exec(SEGURANCA);
+} catch (e) {
+  const motivo = e?.code === 'ENETUNREACH' || /ENETUNREACH|EHOSTUNREACH/.test(String(e?.message))
+    ? 'Não consegui chegar ao servidor. O endereço "db.<projeto>.supabase.co" só funciona com IPv6; use o endereço do "Session pooler" (aws-0-…pooler.supabase.com) do painel Connect do Supabase.'
+    : e?.code === '28P01' || /password authentication failed/i.test(String(e?.message))
+      ? 'Palavra-passe ou utilizador errados no DATABASE_URL.'
+      : e?.code === 'ENOTFOUND' ? 'O endereço do servidor no DATABASE_URL não existe.'
+        : e?.code === 'ETIMEDOUT' || /timeout/i.test(String(e?.message)) ? 'O servidor não respondeu a tempo (rede ou firewall).'
+          : `${e?.message || e}`;
+  falhar(`Não consegui preparar a base de dados (${DESTINO === 'postgres' ? 'DATABASE_URL' : 'Postgres local'}). ${motivo}`, e);
 }

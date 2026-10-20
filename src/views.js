@@ -1,6 +1,7 @@
 // Páginas HTML. Tudo o que é interpolado em h`...` é escapado, exceto o que vier de outro h`...` ou de raw().
 import { TIPOS } from './reconcile.js';
 import { NOTAS, MOEDAS, MEIO_NUMERARIO, rotuloDenominacao } from './numerario.js';
+import { ROTULO_CANAL, canalDoMeio } from './validacao.js';
 
 class Raw {
   constructor(s) {
@@ -35,6 +36,21 @@ const diaSemana = (iso) => new Date(iso + 'T12:00:00Z').toLocaleDateString('pt-P
 const quandoPT = (iso) =>
   iso ? new Date(iso).toLocaleString('pt-PT', { timeZone: 'Europe/Lisbon', dateStyle: 'short', timeStyle: 'short' }) : '';
 const valorCampo = (v) => (v === null || v === undefined ? '' : String(v).replace('.', ','));
+
+// Caixa com que o auditor valida o valor de um meio (CASH, TPA...). É a mesma validação em todo o lado:
+// grava ao marcar (app.js) e volta à página de onde veio, a lista ('lista') ou a página do fecho ('dia').
+function formValidar(data, canal, x, conteudo, { origem = 'lista', query = '' } = {}) {
+  // Validado pelos talões (TPA): a prova são os talões, por isso não se desmarca à mão.
+  if (x.auto) {
+    const dica = `Validado automaticamente: ${x.taloes} talão(ões) comprovam o valor por inteiro${x.porConfirmar ? ` (${x.porConfirmar} ainda por confirmar)` : ''}`;
+    return h`<span class="valida auto" title="${dica}"><input type="checkbox" checked disabled aria-label="${ROTULO_CANAL[canal]} validado automaticamente"> <span>${conteudo}</span> <small class="auto-tag">auto</small></span>`;
+  }
+  const dica = x.validado ? `Validado por ${x.autor} em ${quandoPT(x.quando)}` : x.mudou ? 'O valor mudou desde a validação; valide de novo' : 'Marque para validar este valor';
+  return h`<form method="post" action="/fechos/${data}/validar" data-validar>
+    <input type="hidden" name="meio" value="${canal}"><input type="hidden" name="origem" value="${origem}"><input type="hidden" name="q" value="${query}"><input type="hidden" name="hash" value="">
+    <label class="valida" title="${dica}"><input type="checkbox" name="validado" value="1" ${x.validado ? raw('checked') : ''} aria-label="Validar ${ROTULO_CANAL[canal]}"> <span>${conteudo}</span></label>
+  </form>`;
+}
 
 const ESTADOS = { pendente: 'Pendente', justificada: 'Justificada', resolvida: 'Resolvida' };
 const GRAVIDADES = { erro: 'Erro', aviso: 'Aviso', info: 'Informação' };
@@ -90,7 +106,7 @@ const aviso = (texto, classe = 'erro') => texto && h`<p class="aviso ${classe}">
 
 function subnavConfig(ativo) {
   const item = (href, texto, chave) => h`<a href="${href}" class="${ativo === chave ? 'ativo' : ''}">${texto}</a>`;
-  return h`<nav class="subnav">${item('/config/terminais', 'Terminais TPA', 'terminais')}${item('/config/meios', 'Meios de pagamento', 'meios')}${item('/config/agencias', 'Agências', 'agencias')}${item('/config/utilizadores', 'Utilizadores', 'utilizadores')}</nav>`;
+  return h`<nav class="subnav">${item('/config/terminais', 'Terminais TPA', 'terminais')}${item('/config/meios', 'Meios de pagamento', 'meios')}${item('/config/utilizadores', 'Utilizadores', 'utilizadores')}</nav>`;
 }
 
 // ---------- Entrada ----------
@@ -141,22 +157,36 @@ export function erroPage(user, titulo, texto) {
 }
 
 // ---------- Fechos ----------
-export function fechosPage(user, fechos) {
+export function fechosPage(user, fechos, filtros = {}, dias = [], totalGeral = fechos.length, query = '') {
+  const opcoes = (nome, rotulo, lista) => h`<label>${rotulo}
+  <select name="${nome}"><option value="">Todos</option>${lista.map(([valor, texto]) => h`<option value="${valor}" ${filtros[nome] === valor ? raw('selected') : ''}>${texto}</option>`)}</select></label>`;
   return pagina(user, 'Fechos', h`
 <div class="cabecalho"><h1>Fechos de caixa</h1><a class="botao primario" href="/fechos/carregar">Carregar ficheiros do PMS</a></div>
-${fechos.length === 0
+${totalGeral > 0 && h`<form class="filtros" method="get" action="/fechos">
+  ${seletorPeriodo(filtros.de, filtros.ate, dias)}
+  ${opcoes('pendentes', 'Inconsistências', [['com', 'Com pendentes'], ['sem', 'Sem pendentes']])}
+  ${opcoes('ficheiros', 'Ficheiros', [['completos', 'Diário e faturas carregados'], ['incompletos', 'Em falta']])}
+  ${opcoes('taloes', 'Talões', [['com', 'Com talões'], ['sem', 'Sem talões']])}
+  <button>Filtrar</button> <a href="/fechos">Limpar</a>
+</form>`}
+${totalGeral === 0
     ? h`<p class="vazio">Ainda não há nenhum fecho. Comece por carregar o diário de caixa e o relatório de faturas de um dia.</p>`
+    : fechos.length === 0
+    ? h`<p class="vazio">Nenhum fecho com estes filtros.</p>`
     : h`<div class="tabela-wrap"><table>
-<thead><tr><th>Dia</th><th>Ficheiros</th><th class="num">Total do diário</th><th class="num">Talões</th><th class="num">Pendentes</th><th class="num">Justificadas</th><th class="num">Resolvidas</th></tr></thead>
+<thead><tr><th>Dia</th><th class="num">Total do diário</th><th class="num">CASH</th><th class="num">TPA</th><th class="num">STRIPE</th><th class="num">TBBOOKING</th><th class="num">TRFBANCO</th><th></th></tr></thead>
 <tbody>${fechos.map((f) => h`<tr>
   <td><a href="/fechos/${f.data}"><strong>${dataPT(f.data)}</strong></a> <span class="suave">${diaSemana(f.data)}</span></td>
-  <td>${f.diario_ficheiro ? etiqueta('ok', 'Diário') : etiqueta('falta', 'Falta o diário')} ${f.faturas_ficheiro ? etiqueta('ok', 'Faturas') : etiqueta('falta', 'Faltam as faturas')}
-    ${f.saidas_lista && f.saidas_faturas ? etiqueta('ok', 'Saídas') : ''} ${f.entradas_lista && f.entradas_faturas ? etiqueta('ok', 'Entradas') : ''}</td>
-  <td class="num">${euros(f.total)}</td>
-  <td class="num">${f.taloes}</td>
-  <td class="num">${f.pendentes ? h`<strong class="pendente">${f.pendentes}</strong>` : '0'}</td>
-  <td class="num">${f.justificadas}</td>
-  <td class="num">${f.resolvidas}</td>
+  <td class="num total-fecho ${f.validacao.validado ? 'valido' : ''}" title="${f.validacao.validado ? 'Todos os valores foram validados pelo auditor' : `Validados: ${f.validacao.validados} de ${f.validacao.exigidos}`}">
+    <strong>${f.validacao.validado ? h`<span class="visto" aria-hidden="true">✓</span> ` : ''}${euros(f.total)}</strong>
+    <small class="suave">${f.validacao.validado ? 'Validado' : `${f.validacao.validados}/${f.validacao.exigidos} validados`}</small>
+  </td>
+  ${Object.keys(ROTULO_CANAL).map((k) => {
+    const x = f.validacao.canais[k];
+    if (!x.valor) return h`<td class="num">${traco}</td>`;
+    return h`<td class="num ${x.validado ? 'validado' : ''}">${formValidar(f.data, k, x, euros(x.valor / 100), { query })}</td>`;
+  })}
+  <td class="num"><form method="post" action="/fechos/${f.data}/apagar" data-confirmar="${f.apagarTexto}"><input type="hidden" name="q" value="${query}"><button class="link perigo">Apagar</button></form></td>
 </tr>`)}</tbody></table></div>`}`, 'fechos');
 }
 
@@ -193,7 +223,7 @@ function tabelaIncs(incs, mostrarDia) {
   <td>${i.caixa}</td>
   <td class="num">${euros(i.valor)}</td>
   <td>${etiqueta('e-' + i.estado, ESTADOS[i.estado])}</td>
-  <td class="num">${i.notas || ''}</td>
+  <td class="num">${i.notas ? h`<a href="/inconsistencias/${i.id}#notas" title="Ver as notas">${i.notas}</a>` : ''}</td>
 </tr>`)}</tbody></table></div>`;
 }
 
@@ -241,7 +271,7 @@ function celulasExtrato(e, diario) {
   return h`<td><span class="suave">${confirmados} de ${exigidos.length} pagamentos</span></td><td class="num">${euros(e.comprovado / 100)}</td><td>${tagValidacao(e.comprovado - e.exigido)}</td>`;
 }
 
-function linhasMeios(analise, fecho, numerario, meios) {
+function linhasMeios(analise, fecho, numerario, meios, validacao) {
   const comFaturas = Boolean(fecho.faturas_ficheiro);
   const porTipo = new Map(meios.map((m) => [m.tipo, m]));
   const valores = (n, diario, faturas) => h`<td class="num">${n}</td><td class="num">${euros(diario / 100)}</td>
@@ -251,22 +281,30 @@ function linhasMeios(analise, fecho, numerario, meios) {
   const linhaTaloes = (r, ehGrupo) => h`<td>${r.taloes.length ? (ehGrupo ? h`<span class="suave">${r.taloes.length} ${r.taloes.length === 1 ? 'talão' : 'talões'}</span>` : chipsTaloes(r.taloes)) : h`<span class="suave">sem talões</span>`}</td>
     <td class="num">${euros(r.soma / 100)}</td><td>${tagValidacao(r.soma - r.diario)}</td>`;
 
+  // Validação do auditor (a mesma da lista de fechos): uma caixa por meio; os submétodos TPA seguem a do TPA.
+  const celulaValidar = (canal) => {
+    const x = canal && validacao.canais[canal];
+    if (!x || !x.valor) return h`<td>${traco}</td>`;
+    return h`<td class="${x.validado ? 'validado' : ''}">${formValidar(fecho.data, canal, x, x.validado ? 'Validado' : 'Por validar', { origem: 'dia' })}</td>`;
+  };
+  const validadoTPA = h`<td>${validacao.canais.tpa.validado ? h`<span class="tag ok">Validado</span>` : traco}</td>`;
+
   const linhas = [];
   let grupoFeito = false;
   for (const a of analise.porMeio) {
     const r = resumo(a);
     if (!a.tpa) {
       linhas.push(h`<tr class="${destaque(r.diario, r.faturas)}"><td>${a.tipo}${a.tipo === MEIO_NUMERARIO ? h` <a class="tag ${estadoNumerario(numerario).classe}" href="/fechos/${fecho.data}?contagem=1#numerario" data-abrir-contagem title="Abrir a contagem de numerário">${estadoNumerario(numerario).rotulo}</a>` : ''}</td>
-        ${valores(r.n, r.diario, r.faturas)}${a.extrato ? celulasExtrato(a.extrato, r.diario) : h`<td>${traco}</td><td class="num">${traco}</td><td>${traco}</td>`}</tr>`);
+        ${valores(r.n, r.diario, r.faturas)}${a.extrato ? celulasExtrato(a.extrato, r.diario) : h`<td>${traco}</td><td class="num">${traco}</td><td>${traco}</td>`}${celulaValidar(canalDoMeio(a.tipo, false))}</tr>`);
     } else if (!grupoFeito) {
       grupoFeito = true;
       const filhos = analise.porMeio.filter((x) => x.tpa).map(resumo);
       const soma = (campo) => filhos.reduce((s, x) => s + x[campo], 0);
       const pai = { n: soma('n'), diario: soma('diario'), faturas: soma('faturas'), taloes: filhos.flatMap((x) => x.taloes), soma: soma('soma') };
-      linhas.push(h`<tr class="grupo ${destaque(pai.diario, pai.faturas)}"><td><strong>TPA</strong></td>${valores(pai.n, pai.diario, pai.faturas)}${linhaTaloes(pai, true)}</tr>`);
+      linhas.push(h`<tr class="grupo ${destaque(pai.diario, pai.faturas)}"><td><strong>TPA</strong></td>${valores(pai.n, pai.diario, pai.faturas)}${linhaTaloes(pai, true)}${celulaValidar('tpa')}</tr>`);
       for (const [k, x] of filhos.entries()) {
         const meio = analise.porMeio.filter((y) => y.tpa)[k];
-        linhas.push(h`<tr class="sub ${destaque(x.diario, x.faturas)}"><td><span class="submetodo">${meio.tipo}</span></td>${valores(x.n, x.diario, x.faturas)}${linhaTaloes(x, false)}</tr>`);
+        linhas.push(h`<tr class="sub ${destaque(x.diario, x.faturas)}"><td><span class="submetodo">${meio.tipo}</span></td>${valores(x.n, x.diario, x.faturas)}${linhaTaloes(x, false)}${validadoTPA}</tr>`);
       }
     }
   }
@@ -396,12 +434,15 @@ function subPainel(g, fecho, numerario, fechosTPA, ctx) {
   const ehTPA = g.chave === 'tpa';
   const ehNumerario = !ehTPA && itens[0].tipo === MEIO_NUMERARIO;
   const ehBancario = !ehTPA && Boolean(itens[0].extrato);
+  const canal = ehTPA ? 'tpa' : canalDoMeio(itens[0].tipo, false);
+  const validar = canal && ctx.validacao.canais[canal];
   return h`<div class="subpainel" id="subpainel-${g.chave}" data-subpainel="${g.chave}" role="tabpanel">
   <div class="indicadores">
     <div><span>Movimentos</span><strong>${movs}</strong></div>
     <div><span>Diário</span><strong>${euros(diario / 100)}</strong></div>
     <div><span>Faturas</span><strong>${comFaturas ? euros(faturado / 100) : '—'}</strong></div>
     <div class="${comFaturas && diario !== faturado ? 'alerta' : ''}"><span>Diferença</span><strong>${comFaturas ? euros((faturado - diario) / 100) : '—'}</strong></div>
+    ${validar && validar.valor ? h`<div class="valida-card ${validar.validado ? 'validado' : ''}"><span>Validação do auditor</span>${formValidar(fecho.data, canal, validar, validar.validado ? 'Valor validado' : 'Validar este valor', { origem: 'dia' })}</div>` : ''}
     ${ehTPA ? h`<div class="${soma('taloesSoma') !== diario ? 'alerta' : ''}"><span>Talões (pay slips)</span><strong>${euros(soma('taloesSoma') / 100)}</strong></div>` : ''}
     ${ehBancario ? h`<div class="${itens[0].extrato.comprovado !== itens[0].extrato.exigido ? 'alerta' : ''}"><span>Comprovado no extrato</span><strong>${itens[0].extrato.temExtratos ? euros(itens[0].extrato.comprovado / 100) : '—'}</strong></div>` : ''}
   </div>
@@ -480,7 +521,7 @@ function blocoNumerario(fecho, n) {
 }
 
 export function fechoPage(user, d) {
-  const { fecho, totais, meios, porUtilizador, porAlojamento, pendentesSemAlojamento, analise, bancario, fechosTPA, terminaisPorNumero, caixasLista, incs, filtros, opcoes, taloes, contagem, reservas, numerario } = d;
+  const { fecho, totais, meios, porUtilizador, porAlojamento, pendentesSemAlojamento, analise, bancario, fechosTPA, terminaisPorNumero, caixasLista, incs, filtros, opcoes, taloes, contagem, reservas, numerario, validacao, apagarTexto } = d;
   const dif = totais.faturas - totais.diario;
   const grupos = gruposDeMeios(analise.porMeio);
   const totalIncs = (contagem.pendente || 0) + (contagem.justificada || 0) + (contagem.resolvida || 0);
@@ -497,10 +538,11 @@ export function fechoPage(user, d) {
   <div class="acoes">
     <form method="post" action="/fechos/${fecho.data}/reconciliar"><button>Cruzar de novo</button></form>
     <a class="botao" href="/fechos/carregar">Substituir ficheiros</a>
+    <form method="post" action="/fechos/${fecho.data}/apagar" data-confirmar="${apagarTexto}"><input type="hidden" name="origem" value="dia"><button class="perigo">Apagar fecho</button></form>
   </div>
 </div>
 <div class="indicadores indicadores-fecho">
-  <div><span>Total do diário</span><strong>${euros(totais.diario)}</strong></div>
+  <div class="${validacao.validado ? 'valido-auditor' : ''}" title="${validacao.validado ? 'Todos os valores foram validados pelo auditor' : `Validados pelo auditor: ${validacao.validados} de ${validacao.exigidos}`}"><span>Total do diário${validacao.validado ? ' · validado' : validacao.validados ? ` · ${validacao.validados}/${validacao.exigidos} validados` : ''}</span><strong>${validacao.validado ? h`<span class="visto" aria-hidden="true">✓</span> ` : ''}${euros(totais.diario)}</strong></div>
   <div class="${fecho.faturas_ficheiro && faturasC !== diarioC ? 'alerta' : ''}"><span>Total das faturas</span><strong>${fecho.faturas_ficheiro ? euros(totais.faturas) : '—'}</strong></div>
   <div class="${comprovativosC !== diarioC ? 'alerta' : ''}" title="Contagem de notas e moedas (CASH) + talões dos meios TPA + extratos bancários e relatórios de pagamentos (transferências, Booking.com, Stripe)"><span>Total dos comprovativos</span><strong>${euros(comprovativosC / 100)}</strong></div>
   ${caixaCorreta
@@ -513,7 +555,7 @@ ${caixaCorreta ? h`<p class="aviso ok caixa-correta">O total do diário, o total
   ${[
     ['meios', 'Por meio de pagamento', meios.length, ''],
     ['utilizadores', 'Por utilizador', porUtilizador.length, ''],
-    ['alojamentos', 'Por alojamento', porAlojamento.length, ''],
+    ['alojamentos', 'Por Caixa', porAlojamento.length, ''],
     ...(reservas.some((r) => r.reservas) ? [['reservas', 'Saídas e entradas', '', '']] : []),
     ...(totalIncs ? [['incs', 'Inconsistências', contagem.pendente || 0, contagem.pendente ? 'alerta' : '']] : []),
     ['taloes', 'Talões do dia', taloes.length, ''],
@@ -528,24 +570,15 @@ ${caixaCorreta ? h`<p class="aviso ok caixa-correta">O total do diário, o total
 
   <div class="subpainel" id="subpainel-geral" data-subpainel="geral" role="tabpanel">
     <div class="tabela-wrap"><table class="meios">
-    <thead><tr><th>Meio</th><th class="num">Movimentos</th><th class="num">Diário</th><th class="num">Faturas</th><th class="num">Diferença</th><th>Comprovativos (ID)</th><th class="num">Valor comprovado</th><th>Validação</th></tr></thead>
-    <tbody>${linhasMeios(analise, fecho, numerario, meios)}</tbody>
-    <tfoot><tr><th>Total</th><th class="num">${meios.reduce((s, m) => s + m.movimentos, 0)}</th><th class="num">${euros(totais.diario)}</th><th class="num">${fecho.faturas_ficheiro ? euros(totais.faturas) : '—'}</th><th class="num">${fecho.faturas_ficheiro ? euros(dif) : '—'}</th><th></th><th class="num">${euros(comprovativosC / 100)}</th><th></th></tr></tfoot>
+    <thead><tr><th>Meio</th><th class="num">Movimentos</th><th class="num">Diário</th><th class="num">Faturas</th><th class="num">Diferença</th><th>Comprovativos (ID)</th><th class="num">Valor comprovado</th><th>Validação</th><th>Validado pelo auditor</th></tr></thead>
+    <tbody>${linhasMeios(analise, fecho, numerario, meios, validacao)}</tbody>
+    <tfoot><tr><th>Total</th><th class="num">${meios.reduce((s, m) => s + m.movimentos, 0)}</th><th class="num">${euros(totais.diario)}</th><th class="num">${fecho.faturas_ficheiro ? euros(totais.faturas) : '—'}</th><th class="num">${fecho.faturas_ficheiro ? euros(dif) : '—'}</th><th></th><th class="num">${euros(comprovativosC / 100)}</th><th></th><th>${validacao.validado ? h`<span class="tag ok">Total validado</span>` : `${validacao.validados}/${validacao.exigidos}`}</th></tr></tfoot>
     </table></div>
 
-    <h3>Validações por meio de pagamento <span class="suave">resumo; abra o separador de cada meio para ver os comprovativos</span></h3>
-    <div class="tabela-wrap"><table>
-    <thead><tr><th>Meio</th><th>Estado</th><th>Resumo</th><th></th></tr></thead>
-    <tbody>${grupos.map((g) => {
-      const falhas = g.itens.flatMap((a) => a.verificacoes.filter((x) => x.ok !== true).map((x) => (g.itens.length > 1 ? `${a.tipo}: ` : '') + x.titulo));
-      return h`<tr><td><strong>${g.titulo}</strong></td><td>${etiqueta(CLASSE_ESTADO[g.estado], ROTULO_ESTADO[g.estado])}</td>
-        <td>${g.estado === 'ok' ? h`<span class="suave">Todas as validações passaram</span>` : h`<ul class="resumo-lista">${falhas.map((x) => h`<li>${x}</li>`)}</ul>`}</td>
-        <td><button type="button" data-ir-subaba="${g.chave}">Ver comprovativos</button></td></tr>`;
-    })}</tbody></table></div>
     ${analise.taloesSemMeio.length ? aviso(`${analise.taloesSemMeio.length} talão(ões) de compra sem fatura associada ficam fora da validação por meio: ${analise.taloesSemMeio.map((t) => '#' + t.id).join(', ')}.`, 'info') : ''}
   </div>
 
-  ${grupos.map((g) => subPainel(g, fecho, numerario, fechosTPA, { terminais: terminaisPorNumero, caixas: caixasLista, bancario }))}
+  ${grupos.map((g) => subPainel(g, fecho, numerario, fechosTPA, { terminais: terminaisPorNumero, caixas: caixasLista, bancario, validacao }))}
   ${blocoNumerario(fecho, numerario)}
 </section>
 
@@ -669,7 +702,7 @@ export function extratoPage(user, extrato, linhas, uso) {
 }
 
 // ---------- Diários (resumo geral) ----------
-const COLUNAS_DIARIOS = ['Data', 'Reserva', 'Unidade', 'Quarto', 'Hóspede', 'Check-in', 'Check-out', 'Documento', 'Valor', 'Meio'];
+const COLUNAS_DIARIOS = ['Data', 'Reserva', 'Unidade', 'Quarto', 'Hóspede', 'Check-in', 'Check-out', 'Documento', 'Valor', 'Meio', 'Caixa', 'Operador'];
 
 export function diariosPage(user, d, query) {
   const { filtros, linhas, opcoes, resumo } = d;
@@ -680,11 +713,16 @@ export function diariosPage(user, d, query) {
   <div><h1>Diários</h1><p class="suave">Resumo geral das faturas e notas de crédito de todos os dias carregados, pela data do documento.</p></div>
   <a class="botao" href="/diarios.xls${query ? '?' + query : ''}">Descarregar para Excel</a>
 </div>
-<form class="filtros" method="get" action="/diarios">
+<form class="filtros uma-linha" method="get" action="/diarios">
   ${seletorPeriodo(filtros.de, filtros.ate, opcoes.dias)}
   ${select('serie', 'Série', opcoes.series)}
   ${select('unidade', 'Unidade', opcoes.unidades)}
   ${select('meio', 'Meio de pagamento', opcoes.meios)}
+  ${select('caixa', 'Caixa', opcoes.caixas)}
+  ${select('operador', 'Operador', opcoes.operadores, (x) => (x === '__sem__' ? '(sem operador)' : x))}
+  <label>Faturação
+  <select name="faturacao">${[['', 'Todas'], ['faturadas', 'Faturadas'], ['porfaturar', 'Por faturar']].map(([valor, texto]) => h`<option value="${valor}" ${filtros.faturacao === valor ? raw('selected') : ''}>${texto}</option>`)}</select></label>
+  <label>ID da reserva <input type="search" name="reserva" value="${filtros.reserva}" placeholder="Pesquisar reserva" inputmode="numeric" autocomplete="off"></label>
   <button>Filtrar</button> <a href="/diarios">Limpar</a>
 </form>
 <div class="indicadores">
@@ -693,16 +731,13 @@ export function diariosPage(user, d, query) {
   <div><span>Total</span><strong>${euros(resumo.total)}</strong></div>
   <div><span>Notas de crédito</span><strong>${resumo.notas}</strong></div>
   <div><span>Valor das notas de crédito</span><strong>${euros(resumo.totalNotas)}</strong></div>
+  ${resumo.porFaturar && h`<div class="por-faturar"><span>Reservas por faturar</span><strong>${resumo.porFaturar.reservas} · ${euros(resumo.porFaturar.total)}</strong></div>`}
 </div>
-${resumo.porDia.length > 1 && h`<div class="tabela-wrap estreita"><table>
-<thead><tr><th>Dia</th><th class="num">Linhas</th><th class="num">Reservas</th><th class="num">Total</th></tr></thead>
-<tbody>${resumo.porDia.map((p, i) => h`<tr><td class="dia-${i % 3}"><a href="/fechos/${p.data}">${dataPT(p.data)}</a></td><td class="num">${p.linhas}</td><td class="num">${p.reservas}</td><td class="num">${euros(p.total)}</td></tr>`)}</tbody>
-</table></div>`}
-<p class="suave legenda"><span class="amostra nc"></span> Reserva com nota de crédito no mesmo dia (fatura anulada ou reemitida)</p>
+<p class="suave legenda"><span class="amostra nc"></span> Reserva com nota de crédito no mesmo dia (fatura anulada ou reemitida)${resumo.porFaturar && h` · <span class="amostra pf"></span> Reserva das listas de saídas/entradas ainda sem fatura (valor = total da reserva)`}</p>
 ${linhas.length === 0 ? h`<p class="vazio">Sem faturas com estes filtros. Carregue o relatório de faturas de um dia em Fechos.</p>` : h`
 <div class="tabela-wrap"><table class="diarios">
 <thead><tr>${COLUNAS_DIARIOS.map((c) => h`<th class="${c === 'Valor' ? 'num' : ''}">${c}</th>`)}</tr></thead>
-<tbody>${linhas.map((l) => h`<tr class="${l.comNC ? 'nc' : ''}">
+<tbody>${linhas.map((l) => h`<tr class="${l.comNC ? 'nc' : l.porFaturar ? 'por-faturar' : ''}">
   <td class="dia-${l.grupo % 3}">${dataPT(l.data)}</td>
   <td class="reserva">${l.reserva}</td>
   <td>${l.hotel}</td>
@@ -713,6 +748,8 @@ ${linhas.length === 0 ? h`<p class="vazio">Sem faturas com estes filtros. Carreg
   <td>${l.doc}</td>
   <td class="num dia-${l.grupo % 3}">${euros(l.valor)}</td>
   <td>${l.tipo}</td>
+  <td>${l.caixa}</td>
+  <td>${l.operador}</td>
 </tr>`)}</tbody></table></div>`}`, 'diarios');
 }
 
@@ -720,6 +757,7 @@ ${linhas.length === 0 ? h`<p class="vazio">Sem faturas com estes filtros. Carreg
 export function diariosExcel({ linhas }) {
   const CORES = ['#ffffff', '#ffc000', '#5b9bd5'];
   const ROSA = '#e59adf';
+  const AMARELO = '#fff2cc'; // reservas por faturar
   const borda = 'border:0.5pt solid #000;font-family:Calibri;font-size:11pt;';
   const celula = (valor, fundo, extra = '', attrs = '') => h`<td ${raw(attrs)} style="${borda}background:${fundo};${extra}">${valor}</td>`;
   return h`<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"></head><body>
@@ -727,8 +765,8 @@ export function diariosExcel({ linhas }) {
 <tr>${COLUNAS_DIARIOS.map((c) => h`<th style="${borda}background:#d9d9d9;">${c}</th>`)}</tr>
 ${linhas.map((l) => {
     const dia = CORES[l.grupo % 3];
-    const linha = l.comNC ? ROSA : '#ffffff';
-    const valor = l.comNC ? ROSA : dia;
+    const linha = l.comNC ? ROSA : l.porFaturar ? AMARELO : '#ffffff';
+    const valor = l.comNC ? ROSA : l.porFaturar ? AMARELO : dia;
     return h`<tr>
 ${celula(dataPT(l.data), l.comNC ? '#ffc7ce' : dia, 'text-align:center;')}
 ${celula(l.reserva, l.comNC ? '#ffc7ce' : '#ffffff', `text-align:center;${l.comNC ? 'color:#c00000;' : ''}`)}
@@ -740,6 +778,8 @@ ${celula(dataPT(l.checkout), linha, 'text-align:center;')}
 ${celula(l.doc, linha)}
 ${celula(euros(l.valor), valor, `text-align:right;${l.comNC ? 'font-weight:bold;' : ''}mso-number-format:'\\#\\,\\#\\#0\\.00\\ \\€';`, `x:num="${Number(l.valor).toFixed(2)}"`)}
 ${celula(l.tipo, linha, 'text-align:center;')}
+${celula(l.caixa, linha, 'text-align:center;')}
+${celula(l.operador, linha, 'text-align:center;')}
 </tr>`;
   })}
 </table></body></html>`.toString();
@@ -771,7 +811,7 @@ function tabelaRegistos(registos) {
   });
 }
 
-export function incPage(user, inc, historico, podeMudar, envios, erro) {
+export function incPage(user, inc, historico, envios, erro, { texto = '', estado: estadoEscolhido = '' } = {}) {
   const detalhe = JSON.parse(inc.detalhe_json);
   return pagina(user, TIPOS[inc.tipo] || inc.tipo, h`
 <p><a href="/fechos/${inc.data}#incs">← Fecho de ${dataPT(inc.data)}</a></p>
@@ -792,7 +832,7 @@ ${!inc.ativa && aviso('Esta inconsistência já não é detetada com os dados at
 ${tabelaRegistos(detalhe.registos || [])}
 ${envios.length > 0 && h`<h3>Fotografias</h3><div class="fotos">${envios.map((e) => h`<a href="/envios/${e.id}">${e.mime === 'application/pdf' ? h`<span class="pdf">PDF</span>` : h`<img src="/envios/${e.id}/ficheiro" alt="Talão" loading="lazy">`}</a>`)}</div>`}
 
-<section class="cartao">
+<section class="cartao" id="notas">
   <h2>Notas e estado</h2>
   ${historico.length === 0 && h`<p class="vazio">Ainda sem notas.</p>`}
   <ol class="historico">${historico.map((x) => h`<li class="${x.kind}">
@@ -801,13 +841,13 @@ ${envios.length > 0 && h`<h3>Fotografias</h3><div class="fotos">${envios.map((e)
   </li>`)}</ol>
   ${aviso(erro)}
   <form method="post" action="/inconsistencias/${inc.id}/nota">
-    <label>Nova nota <textarea name="texto" rows="3" required placeholder="O que foi verificado e o que se concluiu"></textarea></label>
-    <button class="primario">Guardar nota</button>
-  </form>
-  <form method="post" action="/inconsistencias/${inc.id}/estado" class="estados">
-    <span>Alterar estado:</span>
-    ${Object.keys(ESTADOS).filter((e) => e !== inc.estado).map((e) => h`<button name="estado" value="${e}" ${podeMudar ? '' : raw('disabled')}>${ESTADOS[e]}</button>`)}
-    ${!podeMudar && h`<span class="suave">Guarde primeiro uma nota a explicar a situação.</span>`}
+    <label>Nova nota <textarea name="texto" rows="3" required placeholder="O que foi verificado e o que se concluiu">${texto}</textarea></label>
+    <fieldset class="estados">
+      <legend>Estado depois de guardar</legend>
+      <label><input type="radio" name="estado" value="" ${estadoEscolhido ? '' : raw('checked')}> Manter (${ESTADOS[inc.estado]})</label>
+      ${Object.keys(ESTADOS).filter((e) => e !== inc.estado).map((e) => h`<label><input type="radio" name="estado" value="${e}" ${estadoEscolhido === e ? raw('checked') : ''}> ${ESTADOS[e]}</label>`)}
+    </fieldset>
+    <button class="primario">Guardar</button>
   </form>
 </section>`, 'incs');
 }

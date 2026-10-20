@@ -78,10 +78,10 @@ const regFatReserva = (f) => ({
 });
 
 // Junta as linhas de cada reserva (uma por quarto) e as suas faturas.
-export function calcularReservas(data, lado) {
-  const linhas = all('SELECT * FROM reservas WHERE data = ? AND lado = ? ORDER BY id', data, lado);
-  const faturas = agrupar(all('SELECT * FROM faturas_reserva WHERE data = ? AND lado = ? ORDER BY doc_data, id', data, lado), 'reserva');
-  const regras = new Map(all('SELECT nome, regra FROM agencias').map((a) => [a.nome, a.regra]));
+export async function calcularReservas(data, lado) {
+  const linhas = await all('SELECT * FROM reservas WHERE data = ? AND lado = ? ORDER BY id', data, lado);
+  const faturas = agrupar(await all('SELECT * FROM faturas_reserva WHERE data = ? AND lado = ? ORDER BY doc_data, id', data, lado), 'reserva');
+  const regras = new Map((await all('SELECT nome, regra FROM agencias')).map((a) => [a.nome, a.regra]));
   return [...agrupar(linhas, 'reserva')].map(([reserva, ls]) => {
     const ativas = ls.filter((l) => !INATIVOS.has(l.status));
     const trocas = new Set();
@@ -109,9 +109,9 @@ export function calcularReservas(data, lado) {
 }
 
 // Números para o quadro de saídas e entradas na página do dia.
-export function resumoReservas(data) {
-  return Object.keys(LADOS).map((lado) => {
-    const rs = calcularReservas(data, lado);
+export async function resumoReservas(data) {
+  return Promise.all(Object.keys(LADOS).map(async (lado) => {
+    const rs = await calcularReservas(data, lado);
     const ativas = rs.filter((r) => r.ativas.length);
     return {
       lado, nome: LADOS[lado], reservas: rs.length, ativas: ativas.length, canceladas: rs.length - ativas.length,
@@ -119,7 +119,7 @@ export function resumoReservas(data) {
       faturado: ativas.reduce((s, r) => s + r.faturado, 0) / 100,
       semFatura: ativas.filter((r) => r.total > 0 && !r.faturas.length).length,
     };
-  });
+  }));
 }
 
 const regTalao = (t) => ({
@@ -127,18 +127,18 @@ const regTalao = (t) => ({
   Cartão: [t.cartao, t.ultimos4 && `****${t.ultimos4}`].filter(Boolean).join(' '), Reserva: t.reservas, 'Enviado por': t.enviado_por,
 });
 
-export function reconciliar(data) {
-  const fecho = get('SELECT * FROM fechos WHERE data = ?', data);
+export async function reconciliar(data) {
+  const fecho = await get('SELECT * FROM fechos WHERE data = ?', data);
   if (!fecho) return;
 
-  const mov = all('SELECT * FROM movimentos WHERE data = ? ORDER BY hora, id', data);
-  const fat = all('SELECT * FROM faturas WHERE data = ? ORDER BY id', data);
-  const taloes = all(
+  const mov = await all('SELECT * FROM movimentos WHERE data = ? ORDER BY hora, id', data);
+  const fat = await all('SELECT * FROM faturas WHERE data = ? ORDER BY id', data);
+  const taloes = await all(
     `SELECT t.*, u.nome AS enviado_por FROM taloes t JOIN envios e ON e.id = t.envio_id JOIN users u ON u.id = e.user_id
-     WHERE t.data = ? AND e.estado = 'confirmado' ORDER BY t.hora, t.id`,
+     WHERE t.data = ? ORDER BY t.hora, t.id`,
     data,
   );
-  const meiosTPA = new Set(all('SELECT codigo FROM meios WHERE tpa = 1').map((m) => m.codigo));
+  const meiosTPA = new Set((await all('SELECT codigo FROM meios WHERE tpa = 1')).map((m) => m.codigo));
   const temDiario = Boolean(fecho.diario_ficheiro);
   const temFaturas = Boolean(fecho.faturas_ficheiro);
 
@@ -156,11 +156,11 @@ export function reconciliar(data) {
   // só quando o movimento não tem documento conhecido é que se recorre ao quarto, que é menos seguro
   // porque no mesmo dia um quarto pode ter um hóspede a sair e outro a entrar.
   const reservaDoDoc = new Map(fat.filter((f) => f.doc && f.reserva).map((f) => [f.doc, f.reserva]));
-  for (const f of all('SELECT doc, reserva FROM faturas_reserva WHERE data = ?', data)) {
+  for (const f of await all('SELECT doc, reserva FROM faturas_reserva WHERE data = ?', data)) {
     if (!reservaDoDoc.has(f.doc)) reservaDoDoc.set(f.doc, f.reserva);
   }
   for (const m of mov) m.reserva = (m.doc && reservaDoDoc.get(m.doc)) || '';
-  const reservasDoDia = all('SELECT * FROM reservas WHERE data = ? ORDER BY id', data);
+  const reservasDoDia = await all('SELECT * FROM reservas WHERE data = ? ORDER BY id', data);
   const doMovimento = (m) => {
     const porId = m.reserva ? reservasDoDia.filter((l) => l.reserva === m.reserva) : [];
     if (porId.length) return porId.map(regReserva);
@@ -168,7 +168,7 @@ export function reconciliar(data) {
   };
 
   // ---------- Contagem de numerário feita pelo auditor contra o CASH do diário ----------
-  const contagemNum = all('SELECT valor, quantidade FROM contagens_numerario WHERE data = ?', data);
+  const contagemNum = await all('SELECT valor, quantidade FROM contagens_numerario WHERE data = ?', data);
   if (contagemNum.length && temDiario) {
     const contado = totalContado(Object.fromEntries(contagemNum.map((c) => [c.valor, c.quantidade])));
     const esperado = soma(mov.filter((m) => m.tipo === MEIO_NUMERARIO));
@@ -186,7 +186,7 @@ export function reconciliar(data) {
 
   // ---------- A. Coerência interna do diário ----------
   if (temDiario) {
-    const resumo = all('SELECT * FROM resumo_diario WHERE data = ?', data);
+    const resumo = await all('SELECT * FROM resumo_diario WHERE data = ?', data);
     if (resumo.length) {
       const porTipo = agrupar(mov, 'tipo');
       const tipos = new Set([...resumo.map((r) => r.tipo), ...porTipo.keys()]);
@@ -322,25 +322,25 @@ export function reconciliar(data) {
   }
 
   // ---------- C. Talões TPA ----------
-  run('UPDATE taloes SET doc_associado = NULL WHERE data = ?', data);
+  await run('UPDATE taloes SET doc_associado = NULL WHERE data = ?', data);
   if (temDiario) {
     const compras = taloes.filter((t) => t.tipo === 'compra');
     const fechosTPA = taloes.filter((t) => t.tipo === 'fecho');
     const cartaoMov = mov.filter((m) => meiosTPA.has(m.tipo) && m.valor > 0).map((m) => ({ ...m, usado: false }));
     const cartaoFat = fat.filter((f) => meiosTPA.has(f.tipo) && f.valor > 0).map((f) => ({ ...f, usado: false }));
     const caixasDoTPA = agrupar(
-      all('SELECT t.numero, c.caixa FROM tpas t JOIN tpa_caixas c ON c.tpa_id = t.id'),
+      await all('SELECT t.numero, c.caixa FROM tpas t JOIN tpa_caixas c ON c.tpa_id = t.id'),
       'numero',
     );
 
-    const associar = (t, docs) => run('UPDATE taloes SET doc_associado = ? WHERE id = ?', [...new Set(docs)].join(', '), t.id);
+    const associar = async (t, docs) => await run('UPDATE taloes SET doc_associado = ? WHERE id = ?', [...new Set(docs)].join(', '), t.id);
     const usarMov = (f) => {
       const m = cartaoMov.find((x) => !x.usado && x.doc === f.doc && x.tipo === f.tipo && cent(x.valor) === cent(f.valor));
       if (m) m.usado = true;
     };
 
     // Sem reserva (ou sem faturas carregadas) procura-se o movimento de cartão com o mesmo valor e hora mais próxima.
-    function porValor(t) {
+    async function porValor(t) {
       const caixas = new Set((caixasDoTPA.get(t.tpa) || []).map((c) => c.caixa));
       const cands = cartaoMov.filter((m) => !m.usado && cent(m.valor) === cent(t.valor));
       if (!cands.length) return false;
@@ -350,7 +350,7 @@ export function reconciliar(data) {
       cands[0].usado = true;
       const f = cartaoFat.find((x) => !x.usado && x.doc === cands[0].doc && cent(x.valor) === cent(t.valor));
       if (f) f.usado = true;
-      associar(t, [cands[0].doc]);
+      await associar(t, [cands[0].doc]);
       return true;
     }
 
@@ -360,7 +360,7 @@ export function reconciliar(data) {
     for (const t of comReserva) {
       const rs = t.reservas.split(',');
       if (!temFaturas) {
-        if (!porValor(t)) semRegisto(t, 'Não há nenhum movimento de cartão por associar com este valor no diário.');
+        if (!await porValor(t)) semRegisto(t, 'Não há nenhum movimento de cartão por associar com este valor no diário.');
         continue;
       }
       const cands = cartaoFat.filter((f) => !f.usado && rs.includes(f.reserva));
@@ -371,7 +371,7 @@ export function reconciliar(data) {
           f.usado = true;
           usarMov(f);
         }
-        associar(t, certos.map((f) => f.doc));
+        await associar(t, certos.map((f) => f.doc));
         continue;
       }
       const daReserva = fat.filter((f) => rs.includes(f.reserva));
@@ -391,7 +391,7 @@ export function reconciliar(data) {
     }
 
     for (const t of semReserva) {
-      const encontrou = porValor(t);
+      const encontrou = await porValor(t);
       if (!encontrou) semRegisto(t, 'O talão não tem reserva e não há nenhum movimento de cartão por associar com este valor.');
       add('TALAO_SEM_RESERVA', t.id, {
         gravidade: 'aviso',
@@ -495,7 +495,7 @@ export function reconciliar(data) {
   }
 
   // ---------- D. Reservas que saem e entram: total da reserva contra o que foi faturado ----------
-  const prazo = Number(config('prazo_dias', PRAZO_OMISSAO));
+  const prazo = Number(await config('prazo_dias', PRAZO_OMISSAO));
   for (const lado of Object.keys(LADOS)) {
     const col = lado === 'saida' ? 'saidas' : 'entradas';
     if (!fecho[`${col}_lista`] || !fecho[`${col}_faturas`]) continue;
@@ -503,7 +503,7 @@ export function reconciliar(data) {
     const exportado = fecho[`${col}_faturas_em`].slice(0, 10);
     const aAguardar = [];
     const deAgencia = [];
-    for (const r of calcularReservas(data, lado)) {
+    for (const r of await calcularReservas(data, lado)) {
       const quem = `${LADOS[lado]} · reserva ${r.reserva} (${r.hospede || 'sem nome'}, ${r.agencia})`;
       const comum = { valor: (r.faturado - r.total) / 100 };
       const registos = [...r.linhas.map(regReserva), ...r.faturas.map(regFatReserva)];
@@ -569,25 +569,30 @@ export function reconciliar(data) {
     }
   }
 
-  guardar(data, achadas);
+  await guardar(data, achadas);
 }
 
-function guardar(data, achadas) {
+// Grava as inconsistências do dia em poucos comandos (lotes), em vez de um por inconsistência: com a base de dados
+// no Supabase, cada comando é uma viagem pela rede.
+const LOTE_INCS = 25;
+async function guardar(data, achadas) {
   const quando = agora();
-  tx(() => {
-    run('UPDATE inconsistencias SET ativa = 0 WHERE data = ?', data);
-    for (const a of achadas) {
-      run(
+  await tx(async () => {
+    await run('UPDATE inconsistencias SET ativa = 0 WHERE data = ?', data);
+    for (let i = 0; i < achadas.length; i += LOTE_INCS) {
+      const lote = achadas.slice(i, i + LOTE_INCS);
+      const valores = lote.flatMap((a) => [data, a.tipo, a.chave, a.gravidade, a.titulo, JSON.stringify(a.detalhe || {}), a.utilizador || null, a.caixa || null, a.valor ?? null, quando, quando]);
+      await run(
         `INSERT INTO inconsistencias (data, tipo, chave, gravidade, titulo, detalhe_json, utilizador, caixa, valor, ativa, criada_em, atualizada_em)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+         VALUES ${lote.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)').join(', ')}
          ON CONFLICT(data, tipo, chave) DO UPDATE SET
            gravidade = excluded.gravidade, titulo = excluded.titulo, detalhe_json = excluded.detalhe_json,
            utilizador = excluded.utilizador, caixa = excluded.caixa, valor = excluded.valor, ativa = 1, atualizada_em = excluded.atualizada_em`,
-        data, a.tipo, a.chave, a.gravidade, a.titulo, JSON.stringify(a.detalhe || {}), a.utilizador || null, a.caixa || null, a.valor ?? null, quando, quando,
+        ...valores,
       );
     }
     // O que deixou de ser detetado desaparece, exceto se o auditor já lá tiver escrito: aí fica guardado como histórico.
-    run(
+    await run(
       `DELETE FROM inconsistencias WHERE data = ? AND ativa = 0
        AND NOT EXISTS (SELECT 1 FROM historico h WHERE h.inconsistencia_id = inconsistencias.id)`,
       data,
@@ -595,6 +600,9 @@ function guardar(data, achadas) {
   });
 }
 
-export function reconciliarTudo() {
-  for (const f of all('SELECT data FROM fechos')) reconciliar(f.data);
+// Vários dias em simultâneo (cada um na sua transação): com a base de dados remota, um a um seria muito lento.
+export async function reconciliarTudo() {
+  const dias = (await all('SELECT data FROM fechos ORDER BY data')).map((f) => f.data);
+  const POR_VEZ = 4;
+  for (let i = 0; i < dias.length; i += POR_VEZ) await Promise.all(dias.slice(i, i + POR_VEZ).map((d) => reconciliar(d)));
 }

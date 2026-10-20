@@ -6,7 +6,7 @@
 //    (payout) tem de ter entrado no extrato bancário com o valor total.
 //
 // Cada linha de extrato só prova um movimento (ou um lote), e as associações feitas à mão pelo auditor valem sempre.
-import { all, run, tx, agora } from './db.js';
+import { all, run, inserir, tx, agora } from './db.js';
 import { normalizar, centimos, chaveDaLinha } from './extratos.js';
 
 // Meio de pagamento do diário -> tipo de comprovativo.
@@ -22,10 +22,10 @@ const palavras = (...textos) =>
 const numeros = (...textos) => new Set(textos.flatMap((t) => String(t ?? '').match(/\d{5,}/g) || []));
 export const chaveDoMovimento = (data, doc, c) => `${data}|${doc}|${c}`;
 
-export function carregarLinhas() {
-  return all(
+export async function carregarLinhas() {
+  return (await all(
     `SELECT l.*, e.tipo AS ex_tipo, e.nome_original FROM extrato_linhas l JOIN extratos e ON e.id = l.extrato_id ORDER BY l.data, l.id`,
-  ).map((l) => ({ ...l, c: centimos(l.valor), cc: l.convertido === null || l.convertido === undefined ? null : centimos(l.convertido) }));
+  )).map((l) => ({ ...l, c: centimos(l.valor), cc: l.convertido === null || l.convertido === undefined ? null : centimos(l.convertido) }));
 }
 
 // Pontuação de um candidato: 4 por referência igual, até 2 pelos nomes, mais as datas.
@@ -73,32 +73,32 @@ function candidatos(item, tipo, linhas, usadas) {
 }
 
 // Dia a dia (do mais antigo para o mais recente) para que uma linha de extrato nunca prove dois movimentos.
-export function comprovativosAteDia(data, opcoes = {}) {
-  const linhas = opcoes.linhas || carregarLinhas();
+export async function comprovativosAteDia(data, opcoes = {}) {
+  const linhas = opcoes.linhas || await carregarLinhas();
   const porId = new Map(linhas.map((l) => [l.id, l]));
   const manuais = new Map();
-  for (const a of all('SELECT * FROM extrato_associacoes')) manuais.set(chaveDoMovimento(a.data, a.doc, a.valor_cent), a.linha_id);
+  for (const a of await all('SELECT * FROM extrato_associacoes')) manuais.set(chaveDoMovimento(a.data, a.doc, a.valor_cent), a.linha_id);
   const usadas = new Set(manuais.values()); // reservadas para os movimentos a que o auditor as ligou
   const usadasBanco = new Set();
   const ctx = { linhas, porId, manuais, usadas, usadasBanco, gruposBanco: new Map() };
 
-  const diasComMovimentos = all(
+  const diasComMovimentos = (await all(
     `SELECT DISTINCT data FROM movimentos WHERE data <= ? AND tipo IN (${TIPOS.map(() => '?').join(',')}) ORDER BY data`,
     data, ...TIPOS,
-  ).map((r) => r.data);
+  )).map((r) => r.data);
   const resultados = new Map();
-  for (const dia of diasComMovimentos) resultados.set(dia, associarDia(dia, ctx));
+  for (const dia of diasComMovimentos) resultados.set(dia, await associarDia(dia, ctx));
   return { dia: resultados.get(data) || vazio(), resultados, linhas, temExtratos: linhas.length > 0, ctx };
 }
 
 const vazio = () => ({ itens: new Map(), porTipo: Object.fromEntries(TIPOS.map((t) => [t, { itens: [], comprovado: 0, exigido: 0 }])) });
 
-function associarDia(dia, ctx) {
-  const movs = all(
+async function associarDia(dia, ctx) {
+  const movs = await all(
     `SELECT doc, tipo, valor, nome, obs, caixa, hora FROM movimentos WHERE data = ? AND tipo IN (${TIPOS.map(() => '?').join(',')}) ORDER BY hora, id`,
     dia, ...TIPOS,
   );
-  const faturas = all('SELECT doc, tipo, valor, reserva, hospede, checkin, checkout, info FROM faturas WHERE data = ?', dia);
+  const faturas = await all('SELECT doc, tipo, valor, reserva, hospede, checkin, checkout, info FROM faturas WHERE data = ?', dia);
   const itens = movs.map((m) => {
     const c = centimos(m.valor);
     const f = faturas.find((x) => x.doc === m.doc && x.tipo === m.tipo && centimos(x.valor) === c);
@@ -239,10 +239,10 @@ function procurarBanco(linha, kind, ctx, consumir) {
 }
 
 // Para a página dos extratos: a que movimento (ou lote) serve cada linha.
-export function usoDasLinhas() {
-  const ate = all('SELECT MAX(data) AS d FROM movimentos').find(Boolean)?.d;
+export async function usoDasLinhas() {
+  const ate = (await all('SELECT MAX(data) AS d FROM movimentos')).find(Boolean)?.d;
   if (!ate) return new Map();
-  const { resultados, ctx } = comprovativosAteDia(ate);
+  const { resultados, ctx } = await comprovativosAteDia(ate);
   const uso = new Map();
   for (const [dia, r] of resultados) {
     for (const i of r.itens.values()) {
@@ -263,8 +263,8 @@ export function usoDasLinhas() {
   }
   void ctx;
   // Créditos dos terminais TPA: servem de comprovativo ao fecho do terminal.
-  const tpaDoFecho = new Map(all(`SELECT id, tpa, data FROM taloes WHERE tipo = 'fecho'`).map((f) => [f.id, f]));
-  for (const [id, x] of liquidacoesAteDia(ate).mapa) {
+  const tpaDoFecho = new Map((await all(`SELECT id, tpa, data FROM taloes WHERE tipo = 'fecho'`)).map((f) => [f.id, f]));
+  for (const [id, x] of (await liquidacoesAteDia(ate)).mapa) {
     const f = tpaDoFecho.get(id);
     if (f) uso.set(x.linha.id, { fecho: true, tpa: f.tpa, dia: f.data });
   }
@@ -275,13 +275,13 @@ export function usoDasLinhas() {
 // O banco credita cada terminal ("CREDITO COMERCIANTE 0001234567 …") com o valor líquido do fecho (sem a comissão).
 const terminalDe = (s) => String(s ?? '').replace(/\D/g, '').replace(/^0+/, '');
 
-export function liquidacoesAteDia(data) {
-  const creditos = carregarLinhas().filter((l) => l.ex_tipo === 'banco' && l.categoria === 'comerciante');
+export async function liquidacoesAteDia(data) {
+  const creditos = (await carregarLinhas()).filter((l) => l.ex_tipo === 'banco' && l.categoria === 'comerciante');
   const resultado = new Map();
   if (!creditos.length) return { mapa: resultado, temCreditos: false };
-  const fechos = all(
+  const fechos = await all(
     `SELECT t.id, t.tpa, t.data, t.hora, t.valor FROM taloes t JOIN envios e ON e.id = t.envio_id
-     WHERE t.tipo = 'fecho' AND e.estado = 'confirmado' AND t.data <= ? AND t.valor > 0 ORDER BY t.data, t.hora, t.id`,
+     WHERE t.tipo = 'fecho' AND t.data <= ? AND t.valor > 0 ORDER BY t.data, t.hora, t.id`,
     data,
   );
   const usados = new Set();
@@ -301,9 +301,9 @@ export function liquidacoesAteDia(data) {
 }
 
 // Guarda as linhas de um extrato; as que já existem noutro extrato (datas sobrepostas) não se repetem.
-export function guardarExtrato(nome, lido, userId) {
+export async function guardarExtrato(nome, lido, userId) {
   const existentes = new Map(
-    all('SELECT l.chave, COUNT(*) AS n FROM extrato_linhas l JOIN extratos e ON e.id = l.extrato_id WHERE e.tipo = ? GROUP BY l.chave', lido.tipo).map((r) => [r.chave, r.n]),
+    (await all('SELECT l.chave, COUNT(*) AS n FROM extrato_linhas l JOIN extratos e ON e.id = l.extrato_id WHERE e.tipo = ? GROUP BY l.chave', lido.tipo)).map((r) => [r.chave, r.n]),
   );
   const novas = [];
   const noFicheiro = new Map();
@@ -316,18 +316,16 @@ export function guardarExtrato(nome, lido, userId) {
   const repetidas = lido.linhas.length - novas.length;
   if (!novas.length) return { id: null, novas: 0, repetidas };
   let id;
-  tx(() => {
-    id = Number(
-      run('INSERT INTO extratos (tipo, nome_original, criado_em, user_id, de, ate, colunas) VALUES (?, ?, ?, ?, ?, ?, ?)', lido.tipo, nome, agora(), userId, lido.de, lido.ate, JSON.stringify(lido.colunas)).lastInsertRowid,
-    );
-    novas.forEach((l, n) =>
-      run(
+  await tx(async () => {
+    id = await inserir('INSERT INTO extratos (tipo, nome_original, criado_em, user_id, de, ate, colunas) VALUES (?, ?, ?, ?, ?, ?, ?)', lido.tipo, nome, agora(), userId, lido.de, lido.ate, JSON.stringify(lido.colunas));
+    for (const [n, l] of novas.entries()) {
+      await run(
         `INSERT INTO extrato_linhas (extrato_id, n, data, descricao, valor, saldo, categoria, referencia, hospede, checkin, checkout, grupo, grupo_data, liquido, taxa, convertido, chave)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         id, n, l.data, l.descricao, l.valor, l.saldo ?? null, l.categoria, l.referencia ?? null, l.hospede ?? null, l.checkin ?? null, l.checkout ?? null,
         l.grupo ?? null, l.grupoData ?? null, l.liquido ?? null, l.taxa ?? null, l.convertido ?? null, l.chave,
-      ),
-    );
+      );
+    }
   });
   return { id, novas: novas.length, repetidas };
 }
