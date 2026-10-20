@@ -34,6 +34,7 @@ const CAMPOS = [
 ];
 const igual = (a, b) => (Buffer.isBuffer(a) || a instanceof Uint8Array ? Buffer.from(a).equals(Buffer.from(b)) : a === b);
 
+// As colunas têm de ser lidas pelo nome real (não com alias): é por ele que a app as decifra.
 // "cif" diz se o valor guardado já está cifrado (a leitura devolve sempre o valor original, já decifrado)
 const SQL_CIF = (coluna, texto) => (texto ? `${coluna} LIKE 'enc:v1:%'` : `substring(${coluna} from 1 for 4) = 'ENC1'::bytea`);
 const ONDE = (coluna, texto) => `${coluna} IS NOT NULL${texto ? ` AND ${coluna} <> ''` : ''}`;
@@ -47,17 +48,17 @@ try {
     const { tabela, chave, coluna, texto } = campo;
     let feitos = 0;
     if (!soEstado) {
-      const linhas = await all(`SELECT ${chave} AS k, ${coluna} AS v, ${SQL_CIF(coluna, texto)} AS cif FROM ${tabela} WHERE ${ONDE(coluna, texto)}`);
+      const linhas = await all(`SELECT ${chave} AS k, ${coluna}, ${SQL_CIF(coluna, texto)} AS cif FROM ${tabela} WHERE ${ONDE(coluna, texto)}`);
       await tx(async () => {
-        for (const { k, v, cif } of linhas) {
+        for (const { k, cif, [coluna]: v } of linhas) {
           if (cif && !rodar) continue; // já cifrado
           await run(`UPDATE ${tabela} SET ${coluna} = ? WHERE ${chave} = ?`, texto ? cifrarTexto(v) : cifrarBytes(v), k);
           feitos++;
         }
         // confirmação: lido de volta, cada valor tem de ser igual ao original
-        const antes = new Map(linhas.map((l) => [l.k, l.v]));
-        for (const d of await all(`SELECT ${chave} AS k, ${coluna} AS v FROM ${tabela} WHERE ${ONDE(coluna, texto)}`)) {
-          if (!igual(d.v, antes.get(d.k))) throw new Error(`${tabela}.${coluna} (${chave} ${d.k}): o valor cifrado não volta ao original. Nada foi alterado.`);
+        const antes = new Map(linhas.map((l) => [l.k, l[coluna]]));
+        for (const d of await all(`SELECT ${chave} AS k, ${coluna} FROM ${tabela} WHERE ${ONDE(coluna, texto)}`)) {
+          if (!igual(d[coluna], antes.get(d.k))) throw new Error(`${tabela}.${coluna} (${chave} ${d.k}): o valor cifrado não volta ao original. Nada foi alterado.`);
         }
       });
     }

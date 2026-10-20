@@ -985,7 +985,9 @@ if (SEM_ESTADO && !cifraAtiva) console.warn('Aviso: sem ENCRYPTION_KEY os dados 
 app.get('/saude', async (req, res) => {
   try {
     await get('SELECT 1 AS ok');
-    res.json({ ok: true, baseDeDados: DESTINO === 'postgres' ? 'postgres' : 'local', encriptacao: cifraAtiva });
+    // Se houver dados cifrados, tenta ler um: falha (503) se a ENCRYPTION_KEY deste servidor não for a certa.
+    const cifrado = await get("SELECT cartao FROM taloes WHERE cartao LIKE 'enc:v1:%' LIMIT 1");
+    res.json({ ok: true, baseDeDados: DESTINO === 'postgres' ? 'postgres' : 'local', encriptacao: cifraAtiva, chaveConfere: cifrado ? true : null });
   } catch (erro) {
     console.error('Falha na verificação da base de dados:', erro.message);
     res.status(503).json({ ok: false });
