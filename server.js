@@ -26,6 +26,7 @@ app.disable('x-powered-by');
 if (SEM_ESTADO || process.env.TRUST_PROXY) app.set('trust proxy', 1);
 app.use((req, res, next) => {
   res.set({
+    'X-Robots-Tag': 'noindex, nofollow, noarchive, nosnippet', // aplicação interna: fora dos motores de pesquisa
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'SAMEORIGIN',
     'Referrer-Policy': 'same-origin',

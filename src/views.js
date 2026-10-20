@@ -83,6 +83,7 @@ function pagina(user, titulo, corpo, ativo = '') {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow, noarchive">
 <title>${titulo} · Auditoria de caixas</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="/style.css?v=${VERSAO}">
