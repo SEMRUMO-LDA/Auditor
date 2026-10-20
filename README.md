@@ -54,7 +54,7 @@ Sem `DATABASE_URL`, se a base de dados local estiver vazia e existir `data/caixa
 A app corre como função da Vercel (o `server.js` exporta a aplicação e o `vercel.json` define o essencial).
 
 1. Crie o esquema no Supabase uma vez (e sempre que o esquema mudar): `npm run esquema`. Na Vercel a app **não** cria tabelas a cada arranque, para os arranques a frio serem rápidos.
-2. No projeto da Vercel, defina as variáveis de ambiente `DATABASE_URL` e, para ler talões por fotografia, `ANTHROPIC_API_KEY`.
+2. No projeto da Vercel, defina as variáveis de ambiente `DATABASE_URL` (e `ENCRYPTION_KEY`, ver "Encriptação"). A chave da Anthropic (leitura de talões) adiciona-se depois na própria app, em Configuração › Leitura de talões.
 3. Use no `DATABASE_URL` o **Transaction pooler** do Supabase (porta `6543`, em Connect › Direct), que é o indicado para funções sem estado. O `aws-1-…pooler.supabase.com:6543` usa o mesmo utilizador e palavra-passe do Session pooler.
 4. Publique. `/saude` responde `{"ok":true}` quando a ligação à base de dados está boa.
 
@@ -78,7 +78,9 @@ Os dados novos ficam cifrados assim que a chave estiver definida; os antigos con
 
 ## Leitura automática dos talões
 
-Copie `.env.example` para `.env` e preencha `ANTHROPIC_API_KEY`. Sem chave a aplicação funciona, mas quem envia o talão tem de preencher os dados à mão. As fotografias são enviadas para a API da Anthropic para leitura.
+O auditor adiciona a chave da API da Anthropic na própria app, em **Configuração › Leitura de talões**: a chave é validada com a Anthropic, guardada na base de dados (encriptada, se houver `ENCRYPTION_KEY`) e passa a valer logo, em Enviar talão, para todos os utilizadores. A chave nunca volta a ser mostrada (só os últimos 4 caracteres) e pode ser substituída ou removida na mesma página.
+
+Como alternativa, pode definir a variável `ANTHROPIC_API_KEY` no servidor (`.env` ou Vercel); a chave guardada na app tem prioridade. Sem nenhuma chave a aplicação funciona, mas quem envia o talão tem de preencher os dados à mão. As fotografias são enviadas para a API da Anthropic para leitura.
 
 ## Utilização
 

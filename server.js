@@ -10,7 +10,7 @@ import { all, get, run, inserir, tx, agora, config, guardarConfig, medirPedido, 
 import { ErroFicheiro } from './src/parsers.js';
 import { importar } from './src/fechos.js';
 import { reconciliar, reconciliarTudo, resumoReservas, calcularReservas, PRAZO_OMISSAO, SEM_AGENCIA } from './src/reconcile.js';
-import { lerTaloes, ErroLeitura, MIMES_IMAGEM } from './src/leitor.js';
+import { lerTaloes, ErroLeitura, MIMES_IMAGEM, estadoChave, validarChave, guardarChave, removerChave } from './src/leitor.js';
 import { cifrarTexto, cifrarBytes, cifraAtiva } from './src/cifra.js';
 import { DENOMINACOES, MAX_QUANTIDADE, MEIO_NUMERARIO, totalContado } from './src/numerario.js';
 import { analisarMeios } from './src/meios.js';
@@ -851,7 +851,7 @@ app.post('/envios/:id/apagar', exigirLogin, carregarEnvio, async (req, res) => {
 });
 
 // ---------- Configuração (auditor) ----------
-const MENSAGENS = { guardado: 'Alterações guardadas.', criado: 'Criado.', password: 'Palavra-passe reposta.' };
+const MENSAGENS = { guardado: 'Alterações guardadas.', criado: 'Criado.', password: 'Palavra-passe reposta.', chave: 'Chave guardada. A leitura automática está ativa para todos os utilizadores.', chaveNaoConfirmada: 'Chave guardada, mas não foi possível confirmá-la agora com a Anthropic (rede ou serviço indisponível). Experimente enviar um talão para testar.', chaveRemovida: 'Chave removida.' };
 const mensagem = (req) => MENSAGENS[req.query.ok];
 
 async function paginaTerminais(req, res, erro, status = 200) {
@@ -890,6 +890,25 @@ app.post('/config/terminais/:id', exigirAuditor, async (req, res, next) => {
   });
   await reconciliarTudo();
   res.redirect('/config/terminais?ok=guardado');
+});
+
+// Chave da API da Anthropic (leitura automática dos talões): só o auditor a define; vale para todos os utilizadores.
+const paginaLeitura = async (req, res, erro, estado = 200) => res.status(estado).send(v.leituraPage(req.user, await estadoChave(), cifraAtiva, mensagem(req), erro));
+app.get('/config/leitura', exigirAuditor, async (req, res) => await paginaLeitura(req, res));
+app.post('/config/leitura', exigirAuditor, async (req, res) => {
+  const chave = String(req.body?.chave || '').trim();
+  try {
+    const { confirmada } = await validarChave(chave);
+    await guardarChave(chave);
+    res.redirect(`/config/leitura?ok=${confirmada ? 'chave' : 'chaveNaoConfirmada'}`);
+  } catch (erro) {
+    if (!(erro instanceof ErroLeitura)) throw erro;
+    await paginaLeitura(req, res, erro.message, 400);
+  }
+});
+app.post('/config/leitura/remover', exigirAuditor, async (req, res) => {
+  await removerChave();
+  res.redirect('/config/leitura?ok=chaveRemovida');
 });
 
 app.get('/config/meios', exigirAuditor, async (req, res) => res.send(v.meiosPage(req.user, await all('SELECT * FROM meios ORDER BY codigo'), mensagem(req))));
@@ -1006,9 +1025,9 @@ if (!SEM_ESTADO) {
     for (const redes of Object.values(os.networkInterfaces())) {
       for (const r of redes || []) if (r.family === 'IPv4' && !r.internal) console.log(`  Na rede local: http://${r.address}:${porta}`);
     }
-    if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
-      console.log('  Aviso: sem ANTHROPIC_API_KEY no ficheiro .env, os talões têm de ser preenchidos à mão.');
-    }
+    estadoChave().then((e) => {
+      if (!e.origem) console.log('  Aviso: sem chave da API da Anthropic (Configuração › Leitura de talões), os talões têm de ser preenchidos à mão.');
+    }).catch(() => {});
   });
 }
 

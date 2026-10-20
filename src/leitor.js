@@ -1,5 +1,7 @@
 // Leitura automática das fotografias de talões TPA com o Claude.
 import Anthropic from '@anthropic-ai/sdk';
+import { config, guardarConfig, run } from './db.js';
+import { cifrarTexto, decifrarTexto } from './cifra.js';
 
 export const MIMES_IMAGEM = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 const MAX_IMAGEM = 5 * 1024 * 1024;
@@ -57,7 +59,60 @@ const ESQUEMA = {
 
 export class ErroLeitura extends Error {}
 
+// A chave da API da Anthropic é definida pelo administrador em Configuração › Leitura de talões e fica na base de dados
+// (encriptada se houver ENCRYPTION_KEY). Se não houver nenhuma lá, usa-se a variável de ambiente ANTHROPIC_API_KEY.
+const CHAVE_CONFIG = 'anthropic_api_key';
+const FORMATO_CHAVE = /^sk-ant-[\w-]{20,}$/;
 let cliente;
+let clienteChave;
+
+async function chaveGuardada() {
+  const guardada = await config(CHAVE_CONFIG, '');
+  return guardada ? decifrarTexto(guardada) : '';
+}
+
+export async function estadoChave() {
+  const guardada = await chaveGuardada();
+  if (guardada) return { origem: 'base', fim: guardada.slice(-4) };
+  const ambiente = process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || '';
+  return ambiente ? { origem: 'ambiente', fim: process.env.ANTHROPIC_API_KEY ? ambiente.slice(-4) : '' } : { origem: null, fim: '' };
+}
+
+// Valida o formato e confirma com a Anthropic que a chave funciona (listar modelos não gasta créditos).
+export async function validarChave(chave) {
+  const c = String(chave || '').trim();
+  if (!FORMATO_CHAVE.test(c)) throw new ErroLeitura('Isto não parece uma chave da API da Anthropic (começa por "sk-ant-").');
+  try {
+    await new Anthropic({ apiKey: c, maxRetries: 0, timeout: 15_000 }).models.list({ limit: 1 });
+  } catch (erro) {
+    if (erro instanceof Anthropic.AuthenticationError || erro instanceof Anthropic.PermissionDeniedError) throw new ErroLeitura('A Anthropic não aceitou esta chave. Confirme que está completa e ativa.');
+    // Outros erros (rede, serviço indisponível): a chave pode estar boa; guarda-se na mesma.
+    return { confirmada: false };
+  }
+  return { confirmada: true };
+}
+
+export async function guardarChave(chave) {
+  await guardarConfig(CHAVE_CONFIG, cifrarTexto(String(chave).trim()));
+  cliente = null;
+}
+
+export async function removerChave() {
+  await run('DELETE FROM config WHERE chave = ?', CHAVE_CONFIG);
+  cliente = null;
+}
+
+async function obterCliente() {
+  const chave = (await chaveGuardada()) || process.env.ANTHROPIC_API_KEY || '';
+  if (!chave && !process.env.ANTHROPIC_AUTH_TOKEN) {
+    throw new ErroLeitura('A leitura automática não está configurada. O administrador pode adicionar a chave da API em Configuração › Leitura de talões.');
+  }
+  if (!cliente || clienteChave !== chave) {
+    cliente = new Anthropic({ ...(chave && { apiKey: chave }), maxRetries: 1, timeout: 90_000 });
+    clienteChave = chave;
+  }
+  return cliente;
+}
 
 // O ficheiro chega como Buffer (o conteúdo vem da base de dados ou do pedido), já não como caminho em disco.
 export async function lerTaloes(bytes, mime) {
@@ -72,8 +127,7 @@ export async function lerTaloes(bytes, mime) {
 
   let resposta;
   try {
-    cliente ??= new Anthropic({ maxRetries: 1, timeout: 90_000 });
-    resposta = await cliente.beta.messages.create({
+    resposta = await (await obterCliente()).beta.messages.create({
       model: 'claude-opus-5-5',
       max_tokens: 16000,
       // Se o modelo recusar o pedido por engano, a API repete-o noutro modelo em vez de devolver a recusa.
@@ -84,10 +138,11 @@ export async function lerTaloes(bytes, mime) {
       messages: [{ role: 'user', content: [ficheiro, { type: 'text', text: 'Extrai os talões deste ficheiro.' }] }],
     });
   } catch (erro) {
-    if (erro instanceof Anthropic.AuthenticationError) throw new ErroLeitura('A chave da API não é válida.');
+    if (erro instanceof ErroLeitura) throw erro;
+    if (erro instanceof Anthropic.AuthenticationError) throw new ErroLeitura('A chave da API não é válida. O administrador pode atualizá-la em Configuração › Leitura de talões.');
     if (erro instanceof Anthropic.RateLimitError) throw new ErroLeitura('O serviço de leitura está ocupado. Tente daqui a pouco.');
     if (erro instanceof Anthropic.APIError) throw new ErroLeitura(`O serviço de leitura devolveu um erro (${erro.status ?? 'sem resposta'}).`);
-    throw new ErroLeitura('A leitura automática não está configurada (falta a chave da API).');
+    throw new ErroLeitura('Não foi possível usar o serviço de leitura automática.');
   }
 
   if (resposta.stop_reason === 'refusal') throw new ErroLeitura('O serviço de leitura recusou este ficheiro.');

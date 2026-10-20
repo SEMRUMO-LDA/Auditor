@@ -107,7 +107,7 @@ const aviso = (texto, classe = 'erro') => texto && h`<p class="aviso ${classe}">
 
 function subnavConfig(ativo) {
   const item = (href, texto, chave) => h`<a href="${href}" class="${ativo === chave ? 'ativo' : ''}">${texto}</a>`;
-  return h`<nav class="subnav">${item('/config/terminais', 'Terminais TPA', 'terminais')}${item('/config/meios', 'Meios de pagamento', 'meios')}${item('/config/utilizadores', 'Utilizadores', 'utilizadores')}</nav>`;
+  return h`<nav class="subnav">${item('/config/terminais', 'Terminais TPA', 'terminais')}${item('/config/meios', 'Meios de pagamento', 'meios')}${item('/config/utilizadores', 'Utilizadores', 'utilizadores')}${item('/config/leitura', 'Leitura de talões', 'leitura')}</nav>`;
 }
 
 // ---------- Entrada ----------
@@ -1032,6 +1032,32 @@ ${meios.length === 0 ? aviso('Os meios de pagamento aparecem depois de carregar 
 <form method="post" action="/config/meios" class="cartao">
   <div class="caixas vertical">${meios.map((m) => h`<label><input type="checkbox" name="tpa" value="${m.codigo}" ${m.tpa ? raw('checked') : ''}> <strong>${m.codigo}</strong> <span class="suave">${m.descricao}</span></label>`)}</div>
   <button class="primario">Guardar</button>
+</form>`}`, 'config');
+}
+
+export function leituraPage(user, estado, cifrada, msg, erro) {
+  const fim = estado.fim ? h` (termina em <strong>${estado.fim}</strong>)` : '';
+  const situacao = estado.origem === 'base'
+    ? aviso(h`A leitura automática está <strong>ativa</strong>. Chave guardada na base de dados${fim}${cifrada ? ', encriptada' : ''}.`, 'ok')
+    : estado.origem === 'ambiente'
+      ? aviso(h`A leitura automática está <strong>ativa</strong>, com a chave definida no servidor (variável ANTHROPIC_API_KEY)${fim}. Pode substituí-la aqui.`, 'ok')
+      : aviso(h`A leitura automática está <strong>desligada</strong>: sem chave, os talões têm de ser preenchidos à mão.`, 'info');
+  return pagina(user, 'Leitura de talões', h`
+<div class="cabecalho"><h1>Configuração</h1></div>
+${subnavConfig('leitura')}
+<p>Os talões enviados por qualquer utilizador são lidos automaticamente com a Anthropic (Claude). Basta adicionar aqui a chave da API; passa a valer logo para todos, em Enviar talão.</p>
+${aviso(msg, 'ok')}${aviso(erro)}
+${situacao}
+<form method="post" action="/config/leitura" class="cartao estreito" autocomplete="off">
+  <h2>${estado.origem === 'base' ? 'Substituir a chave' : 'Adicionar a chave'}</h2>
+  <label>Chave da API da Anthropic
+    <input name="chave" type="password" placeholder="sk-ant-..." autocomplete="off" spellcheck="false" required>
+  </label>
+  <p class="suave">Crie-a em console.anthropic.com › Settings › API Keys (a conta precisa de crédito). A chave não volta a ser mostrada: só os últimos 4 caracteres.${cifrada ? '' : ' Atenção: sem ENCRYPTION_KEY no servidor, a chave fica guardada sem encriptar.'}</p>
+  <button class="primario">Validar e guardar</button>
+</form>
+${estado.origem === 'base' && h`<form method="post" action="/config/leitura/remover" data-confirmar="Remover a chave? A leitura automática fica desligada para todos.">
+  <button class="perigo">Remover a chave</button>
 </form>`}`, 'config');
 }
 
