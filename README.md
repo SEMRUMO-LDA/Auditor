@@ -76,6 +76,10 @@ Quem aceder à base de dados (painel do Supabase, cópias de segurança) só vê
 
 Os dados novos ficam cifrados assim que a chave estiver definida; os antigos continuam a ler-se até serem encriptados. Para trocar de chave: ponha a antiga em `ENCRYPTION_KEY_ANTERIOR`, a nova em `ENCRYPTION_KEY` e corra `npm run encriptar -- --rodar`. Como os campos cifrados não se podem pesquisar na base de dados, nenhum deles é usado em filtros ou ordenações (nomes de hóspedes, quartos e reservas em tabelas como `faturas` e `reservas` não estão cifrados pela app, porque a pesquisa e os cruzamentos dependem deles).
 
+## Fora dos motores de pesquisa
+
+A app é interna e está escondida dos motores de pesquisa: todas as respostas levam `X-Robots-Tag: noindex, nofollow`, as páginas têm `<meta name="robots" content="noindex">`, o `robots.txt` bloqueia tudo e os robôs de pesquisa e de recolha de dados para IA conhecidos (Google, Bing, GPTBot, etc.) recebem 404. Nada disto é uma barreira de segurança; o acesso aos dados exige sempre login.
+
 ## Leitura automática dos talões
 
 O auditor adiciona a chave da API da Anthropic na própria app, em **Configuração › Leitura de talões**: a chave é validada com a Anthropic, guardada na base de dados (encriptada, se houver `ENCRYPTION_KEY`) e passa a valer logo, em Enviar talão, para todos os utilizadores. A chave nunca volta a ser mostrada (só os últimos 4 caracteres) e pode ser substituída ou removida na mesma página.

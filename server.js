@@ -34,6 +34,13 @@ app.use((req, res, next) => {
   });
   next();
 });
+// Fora dos motores de pesquisa: além do noindex e do robots.txt, os robôs de pesquisa (e de recolha de dados para IA)
+// conhecidos recebem 404 em tudo, menos no robots.txt. Os robôs sérios identificam-se no User-Agent.
+const ROBOS = /googlebot|google-inspectiontool|adsbot|mediapartners|storebot|bingbot|bingpreview|msnbot|slurp|duckduckbot|duckduckgo|baiduspider|yandex|sogou|exabot|seznambot|qwantify|bravebot|applebot|petalbot|ia_archiver|archive.org_bot|semrushbot|ahrefsbot|mj12bot|dotbot|bytespider|gptbot|chatgpt-user|oai-searchbot|ccbot|claudebot|claude-web|anthropic-ai|perplexitybot|amazonbot|facebookexternalhit|meta-externalagent|cohere-ai|diffbot|spider|crawler|scrapy/i;
+app.use((req, res, next) => {
+  if (req.path === '/robots.txt' || !ROBOS.test(req.get('user-agent') || '')) return next();
+  res.status(404).type('text/plain').send('Not found');
+});
 // DEBUG_SQL=1: regista, por pedido, quantas consultas à base de dados foram feitas e quanto tempo se esperou por elas.
 if (process.env.DEBUG_SQL) {
   app.use((req, res, next) => {
