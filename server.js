@@ -6,8 +6,7 @@ import path from 'node:path';
 import express from 'express';
 import multer from 'multer';
 import * as auth from './src/auth.js';
-import { all, get, run, inserir, tx, agora, config, guardarConfig, medirPedido, medicaoAtual, DATA_DIR, DESTINO, UPLOAD_DIR } from './src/db.js';
-import { migrar } from './src/migracao.js';
+import { all, get, run, inserir, tx, agora, config, guardarConfig, medirPedido, medicaoAtual, DATA_DIR, DESTINO, SEM_ESTADO, UPLOAD_DIR } from './src/db.js';
 import { ErroFicheiro } from './src/parsers.js';
 import { importar } from './src/fechos.js';
 import { reconciliar, reconciliarTudo, resumoReservas, calcularReservas, PRAZO_OMISSAO, SEM_AGENCIA } from './src/reconcile.js';
@@ -21,6 +20,9 @@ import * as v from './src/views.js';
 
 const app = express();
 app.disable('x-powered-by');
+// Atrás de um proxy (Vercel, ou TRUST_PROXY=1), o endereço do cliente e o https vêm nos cabeçalhos: sem isto o cookie
+// de sessão não ficaria "Secure" e o limite de tentativas de login veria sempre o mesmo endereço.
+if (SEM_ESTADO || process.env.TRUST_PROXY) app.set('trust proxy', 1);
 app.use((req, res, next) => {
   res.set({
     'X-Content-Type-Options': 'nosniff',
@@ -82,13 +84,13 @@ app.get('/login', async (req, res) => {
 app.post('/login', async (req, res) => {
   const { username = '', password = '' } = req.body || {};
   const chave = `${username.toLowerCase()}|${req.ip}`;
-  if (auth.loginBloqueado(chave)) return res.status(429).send(v.loginPage('Demasiadas tentativas. Aguarde 5 minutos.'));
+  if (await auth.loginBloqueado(chave)) return res.status(429).send(v.loginPage('Demasiadas tentativas. Aguarde 5 minutos.'));
   const u = await get('SELECT * FROM users WHERE lower(username) = lower(?) AND ativo = 1', username);
   if (!u || !auth.verificarPassword(password, u.pass_hash)) {
-    auth.registarFalha(chave);
+    await auth.registarFalha(chave);
     return res.status(401).send(v.loginPage('Utilizador ou palavra-passe incorretos.'));
   }
-  auth.limparFalhas(chave);
+  await auth.limparFalhas(chave);
   await auth.iniciarSessao(req, res, u.id);
   res.redirect('/');
 });
@@ -171,13 +173,16 @@ app.post('/fechos/:data/validar', exigirAuditor, async (req, res) => {
   res.redirect(`/fechos${q ? '?' + q : ''}`);
 });
 
-const memoria = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+// Tamanho máximo de cada ficheiro carregado. Na Vercel um pedido não pode passar de 4,5 MB.
+const MAX_FICHEIRO = (SEM_ESTADO ? 4 : 15) * 1024 * 1024;
+const TEXTO_MAX = `${SEM_ESTADO ? 4 : 15} MB`;
+const memoria = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_FICHEIRO } });
 const ficheirosPMS = memoria.array('ficheiros', 12);
 
 app.get('/fechos/carregar', exigirAuditor, (req, res) => res.send(v.carregarPage(req.user)));
 app.post('/fechos/carregar', exigirAuditor, (req, res, next) => {
   ficheirosPMS(req, res, async (erroUpload) => {
-    if (erroUpload) return res.status(400).send(v.carregarPage(req.user, 'Não foi possível receber os ficheiros (máximo 10 MB cada, até 12 ficheiros).'));
+    if (erroUpload) return res.status(400).send(v.carregarPage(req.user, `Não foi possível receber os ficheiros (máximo ${TEXTO_MAX} cada, até 12 ficheiros).`));
     try {
       // O nome do ficheiro chega em latin1 no multipart; converte-se para mostrar bem os acentos.
       const ficheiros = (req.files || []).map((f) => ({ nome: Buffer.from(f.originalname, 'latin1').toString('utf8'), buffer: f.buffer }));
@@ -595,12 +600,12 @@ async function listarExtratos() {
   );
 }
 
-const ficheirosExtratos = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 12 } }).array('ficheiros', 12);
+const ficheirosExtratos = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_FICHEIRO, files: 12 } }).array('ficheiros', 12);
 
 app.get('/extratos', exigirAuditor, async (req, res) => res.send(v.extratosPage(req.user, await listarExtratos(), null)));
 app.post('/extratos', exigirAuditor, (req, res, next) => {
   ficheirosExtratos(req, res, async (erroUpload) => {
-    if (erroUpload) return res.status(400).send(v.extratosPage(req.user, await listarExtratos(), [{ nome: 'Carregamento', erro: 'Não foi possível receber os ficheiros (máximo 10 MB cada, até 12 ficheiros).' }]));
+    if (erroUpload) return res.status(400).send(v.extratosPage(req.user, await listarExtratos(), [{ nome: 'Carregamento', erro: `Não foi possível receber os ficheiros (máximo ${TEXTO_MAX} cada, até 12 ficheiros).` }]));
     try {
       const resultados = [];
       for (const f of req.files || []) {
@@ -659,12 +664,10 @@ app.post('/extratos/desassociar', exigirAuditor, async (req, res) => {
 
 // ---------- Talões ----------
 const EXTENSAO = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif', 'application/pdf': '.pdf' };
+// O ficheiro fica em memória e daí vai para a base de dados (sem disco). Na Vercel os pedidos aceitam até 4,5 MB.
 const fotos = multer({
-  storage: multer.diskStorage({
-    destination: UPLOAD_DIR,
-    filename: (req, file, cb) => cb(null, crypto.randomBytes(16).toString('hex') + EXTENSAO[file.mimetype]),
-  }),
-  limits: { fileSize: 15 * 1024 * 1024 },
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_FICHEIRO },
   fileFilter: (req, file, cb) => cb(null, file.mimetype in EXTENSAO),
 }).single('ficheiro');
 
@@ -673,12 +676,13 @@ app.get('/taloes/novo', exigirLogin, (req, res) => res.send(v.novoTalaoPage(req.
 app.post('/taloes/enviar', exigirLogin, (req, res, next) => {
   fotos(req, res, async (erroUpload) => {
     try {
-      if (erroUpload) return res.status(400).send(v.novoTalaoPage(req.user, 'O ficheiro é demasiado grande (máximo 15 MB).'));
+      if (erroUpload) return res.status(400).send(v.novoTalaoPage(req.user, `O ficheiro é demasiado grande (máximo ${TEXTO_MAX}).`));
       const f = req.file;
       if (!f) return res.status(400).send(v.novoTalaoPage(req.user, 'Escolha uma fotografia (JPEG ou PNG) ou um PDF.'));
-      const id = await inserir('INSERT INTO envios (user_id, ficheiro, mime, nome_original, criado_em) VALUES (?, ?, ?, ?, ?)', req.user.id, f.filename, f.mimetype, f.originalname, agora());
+      const id = await inserir('INSERT INTO envios (user_id, ficheiro, mime, nome_original, criado_em) VALUES (?, ?, ?, ?, ?)', req.user.id, crypto.randomBytes(16).toString('hex') + EXTENSAO[f.mimetype], f.mimetype, f.originalname, agora());
+      await run('INSERT INTO envio_ficheiros (envio_id, conteudo) VALUES (?, ?)', id, f.buffer);
       try {
-        const lidos = await lerTaloes(f.path, f.mimetype);
+        const lidos = await lerTaloes(f.buffer, f.mimetype);
         await tx(async () => {
           await run('UPDATE envios SET leitura_json = ? WHERE id = ?', JSON.stringify(lidos), id);
           for (const t of lidos) {
@@ -747,8 +751,15 @@ app.get('/envios/:id', exigirLogin, carregarEnvio, async (req, res) => {
   res.send(v.envioPage(req.user, req.envio, await taloesDoEnvio(req.envio.id), req.editavel));
 });
 
-app.get('/envios/:id/ficheiro', exigirLogin, carregarEnvio, (req, res) => {
-  res.sendFile(req.envio.ficheiro, { root: UPLOAD_DIR, headers: { 'Content-Type': req.envio.mime, 'Cache-Control': 'private, max-age=3600' } });
+app.get('/envios/:id/ficheiro', exigirLogin, carregarEnvio, async (req, res, next) => {
+  let conteudo = (await get('SELECT conteudo FROM envio_ficheiros WHERE envio_id = ?', req.envio.id))?.conteudo;
+  // Envios de antes de os ficheiros irem para a base de dados: ainda podem estar na pasta data/taloes.
+  if (!conteudo) {
+    const antigo = path.join(UPLOAD_DIR, path.basename(req.envio.ficheiro));
+    if (!SEM_ESTADO && fs.existsSync(antigo)) conteudo = fs.readFileSync(antigo);
+  }
+  if (!conteudo) return next();
+  res.set({ 'Content-Type': req.envio.mime, 'Cache-Control': 'private, max-age=3600' }).send(Buffer.from(conteudo));
 });
 
 // "116,00", "116.00" e "1.234,56" são todos aceites.
@@ -833,7 +844,7 @@ app.post('/envios/:id/apagar', exigirLogin, carregarEnvio, async (req, res) => {
   if (!req.editavel) return res.status(403).send(v.erroPage(req.user, 'Envio já confirmado', 'Só o auditor pode apagar um talão depois de confirmado.'));
   const datas = new Set((await taloesDoEnvio(req.envio.id)).map((t) => t.data).filter(Boolean));
   await run('DELETE FROM envios WHERE id = ?', req.envio.id);
-  fs.rmSync(path.join(UPLOAD_DIR, req.envio.ficheiro), { force: true });
+  if (!SEM_ESTADO) fs.rmSync(path.join(UPLOAD_DIR, path.basename(req.envio.ficheiro)), { force: true }); // ficheiro antigo, se existir
   for (const data of datas) await reconciliar(data);
   res.redirect(req.user.role === 'auditor' ? '/taloes' : '/taloes/meus');
 });
@@ -940,6 +951,17 @@ app.post('/config/utilizadores/:id/password', exigirAuditor, async (req, res, ne
   res.redirect('/config/utilizadores?ok=password');
 });
 
+// Verificação do serviço (e da ligação à base de dados), sem sessão: útil para ver se o deploy está bem.
+app.get('/saude', async (req, res) => {
+  try {
+    await get('SELECT 1 AS ok');
+    res.json({ ok: true, baseDeDados: DESTINO === 'postgres' ? 'postgres' : 'local' });
+  } catch (erro) {
+    console.error('Falha na verificação da base de dados:', erro.message);
+    res.status(503).json({ ok: false });
+  }
+});
+
 // ---------- Erros ----------
 app.use((req, res) => {
   if (!req.user) return res.redirect('/login');
@@ -951,27 +973,39 @@ app.use((erro, req, res, next) => {
   res.status(500).send(v.erroPage(req.user, 'Ocorreu um erro', 'Não foi possível concluir o pedido. Tente de novo; se continuar, avise o responsável pela aplicação.'));
 });
 
-// Arranque: se a base de dados nova estiver vazia mas existir a antiga (SQLite), os dados não podem "desaparecer".
-const SQLITE_ANTIGO = path.join(DATA_DIR, 'caixas.db');
-if (fs.existsSync(SQLITE_ANTIGO) && (await get('SELECT COUNT(*) AS n FROM users')).n === 0) {
-  if (DESTINO === 'local') {
-    console.log('A copiar os dados do SQLite antigo (data/caixas.db) para o Postgres local...');
-    const r = await migrar({ origem: SQLITE_ANTIGO });
-    console.log(`  copiadas ${r.reduce((s, x) => s + x.destino, 0)} linhas em ${r.length} tabelas. O ficheiro antigo fica como cópia de segurança.`);
-  } else {
-    console.log('\n  AVISO: a base de dados do Supabase está vazia, mas existe a base de dados antiga (data/caixas.db).');
-    console.log('         Para copiar os dados para o Supabase, pare a app e corra: npm run migrar\n');
+// Arranque (só num servidor normal; numa função sem estado cada arranque a frio tem de ser o mais curto possível).
+if (!SEM_ESTADO) {
+  const { migrar, importarFicheirosLocais } = await import('./src/migracao.js');
+  // Se a base de dados nova estiver vazia mas existir a antiga (SQLite), os dados não podem "desaparecer".
+  const SQLITE_ANTIGO = path.join(DATA_DIR, 'caixas.db');
+  if (fs.existsSync(SQLITE_ANTIGO) && (await get('SELECT COUNT(*) AS n FROM users')).n === 0) {
+    if (DESTINO === 'local') {
+      console.log('A copiar os dados do SQLite antigo (data/caixas.db) para o Postgres local...');
+      const r = await migrar({ origem: SQLITE_ANTIGO });
+      console.log(`  copiadas ${r.reduce((x, y) => x + y.destino, 0)} linhas em ${r.length} tabelas. O ficheiro antigo fica como cópia de segurança.`);
+    } else {
+      console.log('\n  AVISO: a base de dados do Supabase está vazia, mas existe a base de dados antiga (data/caixas.db).');
+      console.log('         Para copiar os dados para o Supabase, pare a app e corra: npm run migrar\n');
+    }
   }
+  // Fotografias e PDF de talões de antes de passarem para a base de dados.
+  const n = await importarFicheirosLocais();
+  if (n) console.log(`  ${n} ficheiro(s) de talões da pasta data/taloes copiados para a base de dados.`);
 }
 
 const porta = Number(process.env.PORT) || 3000;
-app.listen(porta, () => {
-  console.log(`Auditoria de caixas a correr em http://localhost:${porta}`);
-  console.log(`  Base de dados: ${DESTINO === 'postgres' ? 'Postgres do DATABASE_URL (Supabase)' : 'Postgres local (data/pglite) — defina DATABASE_URL no .env para usar o Supabase'}`);
-  for (const redes of Object.values(os.networkInterfaces())) {
-    for (const r of redes || []) if (r.family === 'IPv4' && !r.internal) console.log(`  Na rede local: http://${r.address}:${porta}`);
-  }
-  if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
-    console.log('  Aviso: sem ANTHROPIC_API_KEY no ficheiro .env, os talões têm de ser preenchidos à mão.');
-  }
-});
+// Na Vercel não se põe à escuta: ela chama a app exportada em cada pedido.
+if (!SEM_ESTADO) {
+  app.listen(porta, () => {
+    console.log(`Auditoria de caixas a correr em http://localhost:${porta}`);
+    console.log(`  Base de dados: ${DESTINO === 'postgres' ? 'Postgres do DATABASE_URL (Supabase)' : 'Postgres local (data/pglite) — defina DATABASE_URL no .env para usar o Supabase'}`);
+    for (const redes of Object.values(os.networkInterfaces())) {
+      for (const r of redes || []) if (r.family === 'IPv4' && !r.internal) console.log(`  Na rede local: http://${r.address}:${porta}`);
+    }
+    if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
+      console.log('  Aviso: sem ANTHROPIC_API_KEY no ficheiro .env, os talões têm de ser preenchidos à mão.');
+    }
+  });
+}
+
+export default app;

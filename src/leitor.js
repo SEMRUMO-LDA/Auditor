@@ -1,5 +1,4 @@
 // Leitura automática das fotografias de talões TPA com o Claude.
-import fs from 'node:fs';
 import Anthropic from '@anthropic-ai/sdk';
 
 export const MIMES_IMAGEM = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
@@ -60,10 +59,10 @@ export class ErroLeitura extends Error {}
 
 let cliente;
 
-export async function lerTaloes(caminho, mime) {
+// O ficheiro chega como Buffer (o conteúdo vem da base de dados ou do pedido), já não como caminho em disco.
+export async function lerTaloes(bytes, mime) {
   const eImagem = MIMES_IMAGEM.includes(mime);
   if (!eImagem && mime !== 'application/pdf') throw new ErroLeitura('Tipo de ficheiro não suportado pela leitura automática.');
-  const bytes = fs.readFileSync(caminho);
   if (eImagem && bytes.length > MAX_IMAGEM) throw new ErroLeitura('A fotografia é demasiado grande para a leitura automática.');
 
   const data = bytes.toString('base64');

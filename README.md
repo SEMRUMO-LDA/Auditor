@@ -34,7 +34,7 @@ A app usa **Postgres**, de duas formas (o SQL é o mesmo):
 
 Ao ligar, a app liga o **RLS** (segurança por linha) em todas as tabelas, sem políticas: a chave pública do Supabase (`anon`) não consegue ler nem escrever nada pela API de dados. A app liga-se diretamente ao Postgres, que ignora o RLS. O `DATABASE_URL` é uma palavra-passe: não o partilhe nem o ponha no repositório (o `.env` está no `.gitignore`).
 
-As fotografias e PDF dos talões continuam a ser guardados em ficheiros, na pasta `data/taloes`.
+As fotografias e PDF dos talões ficam na própria base de dados (tabela `envio_ficheiros`), por isso não há ficheiros em disco para perder nem para copiar. Os talões antigos da pasta `data/taloes` são copiados sozinhos no arranque (ou com `npm run esquema -- --ficheiros`).
 
 ### Copiar dados existentes
 
@@ -48,6 +48,17 @@ Copia a base de dados antiga (SQLite, `data/caixas.db`) para o destino atual (o 
 - `npm run migrar -- --substituir` apaga primeiro o que já estiver no destino.
 
 Sem `DATABASE_URL`, se a base de dados local estiver vazia e existir `data/caixas.db`, a app copia-a sozinha no arranque.
+
+### Publicar na Vercel
+
+A app corre como função da Vercel (o `server.js` exporta a aplicação e o `vercel.json` define o essencial).
+
+1. Crie o esquema no Supabase uma vez (e sempre que o esquema mudar): `npm run esquema`. Na Vercel a app **não** cria tabelas a cada arranque, para os arranques a frio serem rápidos.
+2. No projeto da Vercel, defina as variáveis de ambiente `DATABASE_URL` e, para ler talões por fotografia, `ANTHROPIC_API_KEY`.
+3. Use no `DATABASE_URL` o **Transaction pooler** do Supabase (porta `6543`, em Connect › Direct), que é o indicado para funções sem estado. O `aws-1-…pooler.supabase.com:6543` usa o mesmo utilizador e palavra-passe do Session pooler.
+4. Publique. `/saude` responde `{"ok":true}` quando a ligação à base de dados está boa.
+
+Limites na Vercel: cada ficheiro carregado pode ter até 4 MB (limite de 4,5 MB por pedido da plataforma), a função tem 60 s por pedido, e a cada função corresponde uma única ligação à base de dados. O limite de tentativas de login guarda-se na base de dados, por isso vale entre instâncias.
 
 ## Leitura automática dos talões
 
@@ -69,7 +80,7 @@ Copie `.env.example` para `.env` e preencha `ANTHROPIC_API_KEY`. Sem chave a apl
 ## Dados e cópias de segurança
 
 - Com o Supabase, a base de dados é gerida por eles (cópias de segurança no painel do projeto).
-- Os talões (fotografias e PDF) ficam em `data/taloes`: faça cópia dessa pasta.
+- Os talões (fotografias e PDF) ficam na base de dados, juntamente com tudo o resto.
 - Com o Postgres local, faça cópia da pasta `data/` inteira.
 
 ## Testes

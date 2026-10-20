@@ -84,3 +84,25 @@ test('apagar um envio apaga os seus talões (em cascata)', async () => {
   await db.run('DELETE FROM envios WHERE id = ?', envio);
   assert.equal((await db.get('SELECT COUNT(*) AS n FROM taloes WHERE envio_id = ?', envio)).n, 0);
 });
+
+test('o ficheiro de um envio guarda-se na base de dados (binário intacto) e apaga-se com o envio', async () => {
+  const user = await novoUtilizador('Ficheiros');
+  const envio = await db.inserir("INSERT INTO envios (user_id, ficheiro, mime, criado_em) VALUES (?, 'y.pdf', 'application/pdf', ?)", user, db.agora());
+  const bytes = Buffer.from([0, 1, 2, 255, 254, 37, 80, 68, 70]);
+  await db.run('INSERT INTO envio_ficheiros (envio_id, conteudo) VALUES (?, ?)', envio, bytes);
+  const lido = (await db.get('SELECT conteudo FROM envio_ficheiros WHERE envio_id = ?', envio)).conteudo;
+  assert.deepEqual(Buffer.from(lido), bytes);
+  await db.run('DELETE FROM envios WHERE id = ?', envio);
+  assert.equal((await db.get('SELECT COUNT(*) AS n FROM envio_ficheiros WHERE envio_id = ?', envio)).n, 0);
+});
+
+test('o travão de login vive na base de dados: bloqueia à 5.ª falha e limpa-se com um login bom', async () => {
+  const auth = await import('../src/auth.js');
+  const chave = 'ip-de-teste';
+  for (let i = 0; i < 4; i++) await auth.registarFalha(chave);
+  assert.equal(await auth.loginBloqueado(chave), false);
+  await auth.registarFalha(chave);
+  assert.equal(await auth.loginBloqueado(chave), true);
+  await auth.limparFalhas(chave);
+  assert.equal(await auth.loginBloqueado(chave), false);
+});

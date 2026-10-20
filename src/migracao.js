@@ -3,8 +3,7 @@
 // a usar a app localmente e depois liga o Supabase. A origem só é lida; nunca é alterada.
 import fs from 'node:fs';
 import path from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
-import { all, get, run, tx, DATA_DIR } from './db.js';
+import { all, get, run, tx, DATA_DIR, UPLOAD_DIR } from './db.js';
 import { TABELAS } from './esquema.js';
 
 const LOTE = 400; // linhas por INSERT
@@ -20,6 +19,7 @@ async function abrirOrigem(origem) {
   }
   const ficheiro = path.resolve(origem);
   if (!fs.existsSync(ficheiro)) throw new Error(`Não encontro a base de dados de origem: ${ficheiro}`);
+  const { DatabaseSync } = await import('node:sqlite'); // só aqui: não é preciso (nem carrega) no dia a dia
   const antiga = new DatabaseSync(ficheiro, { readOnly: true });
   const existentes = new Set(antiga.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((t) => t.name));
   return { existe: (t) => existentes.has(t), linhas: async (t) => antiga.prepare(`SELECT * FROM ${t}`).all(), fechar: () => antiga.close() };
@@ -70,4 +70,22 @@ export async function migrar({ origem, substituir = false }) {
     await fonte.fechar();
   }
   return resultado;
+}
+
+// Os talões de antes de os ficheiros irem para a base de dados estão em data/taloes. Copia-os para envio_ficheiros
+// (só os que ainda não lá estão) para que a app os mostre também quando não há disco, como na Vercel.
+// Devolve quantos ficheiros foram copiados.
+export async function importarFicheirosLocais() {
+  if (!fs.existsSync(UPLOAD_DIR)) return 0;
+  const pendentes = await all(
+    'SELECT e.id, e.ficheiro FROM envios e LEFT JOIN envio_ficheiros f ON f.envio_id = e.id WHERE f.envio_id IS NULL',
+  );
+  let copiados = 0;
+  for (const e of pendentes) {
+    const origem = path.join(UPLOAD_DIR, path.basename(e.ficheiro));
+    if (!fs.existsSync(origem)) continue;
+    await run('INSERT INTO envio_ficheiros (envio_id, conteudo) VALUES (?, ?) ON CONFLICT (envio_id) DO NOTHING', e.id, fs.readFileSync(origem));
+    copiados++;
+  }
+  return copiados;
 }

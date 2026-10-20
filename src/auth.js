@@ -32,6 +32,9 @@ export async function iniciarSessao(req, res, userId) {
   const token = crypto.randomBytes(32).toString('hex');
   const expira = new Date(Date.now() + DIAS_SESSAO * 86400e3);
   await run('INSERT INTO sessions (token_hash, user_id, expira_em) VALUES (?, ?, ?)', hashToken(token), userId, expira.toISOString());
+  // Limpeza: as sessões expiradas e as falhas de login antigas não se acumulam.
+  await run('DELETE FROM sessions WHERE expira_em < ?', agora());
+  await run('DELETE FROM login_falhas WHERE ultima < ?', Date.now() - 86400e3);
   res.cookie(COOKIE, token, { httpOnly: true, sameSite: 'lax', secure: req.secure, expires: expira });
 }
 
@@ -71,20 +74,23 @@ export function exigirAuditor(req, res, next) {
   next();
 }
 
-// Travão simples contra tentativas repetidas de login: 5 falhas bloqueiam 5 minutos.
-const falhas = new Map();
+// Travão simples contra tentativas repetidas de login: 5 falhas bloqueiam 5 minutos. Guarda-se na base de dados
+// (e não em memória) para valer entre instâncias, como acontece numa função sem estado.
 const MAX_FALHAS = 5;
 const BLOQUEIO_MS = 5 * 60e3;
 
-export function loginBloqueado(chave) {
-  const f = falhas.get(chave);
+export async function loginBloqueado(chave) {
+  const f = await get('SELECT n, ultima FROM login_falhas WHERE chave = ?', chave);
   return Boolean(f && f.n >= MAX_FALHAS && Date.now() - f.ultima < BLOQUEIO_MS);
 }
-export function registarFalha(chave) {
-  const f = falhas.get(chave);
-  if (!f || Date.now() - f.ultima > BLOQUEIO_MS) falhas.set(chave, { n: 1, ultima: Date.now() });
-  else falhas.set(chave, { n: f.n + 1, ultima: Date.now() });
+export async function registarFalha(chave) {
+  // Passado o tempo de bloqueio, a contagem recomeça em 1.
+  await run(
+    `INSERT INTO login_falhas (chave, n, ultima) VALUES (?, 1, ?)
+     ON CONFLICT (chave) DO UPDATE SET n = CASE WHEN excluded.ultima - login_falhas.ultima > ? THEN 1 ELSE login_falhas.n + 1 END, ultima = excluded.ultima`,
+    chave, Date.now(), BLOQUEIO_MS,
+  );
 }
-export function limparFalhas(chave) {
-  falhas.delete(chave);
+export async function limparFalhas(chave) {
+  await run('DELETE FROM login_falhas WHERE chave = ?', chave);
 }

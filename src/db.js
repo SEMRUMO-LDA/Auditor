@@ -8,11 +8,19 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { ESQUEMA, SEGURANCA } from './esquema.js';
 
 export const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(import.meta.dirname, '..', 'data'));
-export const UPLOAD_DIR = path.join(DATA_DIR, 'taloes'); // as fotografias dos talões continuam em ficheiros locais
-fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+// Os talões novos ficam na base de dados. Esta pasta só serve para ler os ficheiros antigos (de antes dessa mudança).
+export const UPLOAD_DIR = path.join(DATA_DIR, 'taloes');
+
+// Numa função sem estado (Vercel) não há disco para escrever, as ligações são curtas e o esquema não se recria a cada arranque.
+export const SEM_ESTADO = Boolean(process.env.VERCEL);
+if (!SEM_ESTADO) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const URL_BD = (process.env.DATABASE_URL || '').trim();
 export const DESTINO = URL_BD ? 'postgres' : 'local';
+if (SEM_ESTADO && !URL_BD) {
+  console.error('\nErro na base de dados: na Vercel é preciso definir a variável DATABASE_URL (Supabase).\n');
+  process.exit(1);
+}
 
 class ErroBaseDeDados extends Error {}
 
@@ -35,9 +43,11 @@ async function ligarPostgres() {
   const local = /@(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(URL_BD);
   // O Supabase exige SSL. Por omissão não se verifica o certificado (DATABASE_SSL_VERIFICAR=1 para verificar).
   const ssl = process.env.DATABASE_SSL === 'off' || local ? false : { rejectUnauthorized: process.env.DATABASE_SSL_VERIFICAR === '1' };
+  // Numa função sem estado, cada instância fica com poucas ligações (o "transaction pooler" do Supabase, porta 6543,
+  // reparte-as); num servidor normal usa-se um conjunto maior.
   const pool = new pg.Pool({
-    connectionString: URL_BD, ssl, max: Number(process.env.DATABASE_POOL) || 8,
-    connectionTimeoutMillis: 15000, idleTimeoutMillis: 30000, allowExitOnIdle: false,
+    connectionString: URL_BD, ssl, max: Number(process.env.DATABASE_POOL) || (SEM_ESTADO ? 1 : 8),
+    connectionTimeoutMillis: 15000, idleTimeoutMillis: SEM_ESTADO ? 5000 : 30000,
   });
   pool.on('error', (e) => console.error('Erro numa ligação inativa à base de dados:', e.message));
   return {
@@ -137,9 +147,15 @@ export async function guardarConfig(chave, valor) {
 export const fecharBaseDeDados = () => destino.fechar();
 
 // ---------- Esquema ----------
-try {
+// Cria as tabelas que faltarem (e liga o RLS). Num servidor normal faz-se a cada arranque; na Vercel não (cada arranque
+// a frio pagaria ~40 comandos pela rede): corra "npm run esquema" ou DATABASE_ESQUEMA=1 quando o esquema mudar.
+export const CRIAR_ESQUEMA = process.env.DATABASE_ESQUEMA ? process.env.DATABASE_ESQUEMA !== '0' : !SEM_ESTADO;
+export async function criarEsquema() {
   await destino.exec(ESQUEMA);
   await destino.exec(SEGURANCA);
+}
+try {
+  if (CRIAR_ESQUEMA) await criarEsquema();
 } catch (e) {
   const motivo = e?.code === 'ENETUNREACH' || /ENETUNREACH|EHOSTUNREACH/.test(String(e?.message))
     ? 'Não consegui chegar ao servidor. O endereço "db.<projeto>.supabase.co" só funciona com IPv6; use o endereço do "Session pooler" (aws-0-…pooler.supabase.com) do painel Connect do Supabase.'
