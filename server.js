@@ -11,6 +11,7 @@ import { ErroFicheiro } from './src/parsers.js';
 import { importar } from './src/fechos.js';
 import { reconciliar, reconciliarTudo, resumoReservas, calcularReservas, PRAZO_OMISSAO, SEM_AGENCIA } from './src/reconcile.js';
 import { lerTaloes, ErroLeitura, MIMES_IMAGEM } from './src/leitor.js';
+import { cifrarTexto, cifrarBytes, cifraAtiva } from './src/cifra.js';
 import { DENOMINACOES, MAX_QUANTIDADE, MEIO_NUMERARIO, totalContado } from './src/numerario.js';
 import { analisarMeios } from './src/meios.js';
 import { lerExtrato, ErroExtrato, centimos } from './src/extratos.js';
@@ -680,7 +681,7 @@ app.post('/taloes/enviar', exigirLogin, (req, res, next) => {
       const f = req.file;
       if (!f) return res.status(400).send(v.novoTalaoPage(req.user, 'Escolha uma fotografia (JPEG ou PNG) ou um PDF.'));
       const id = await inserir('INSERT INTO envios (user_id, ficheiro, mime, nome_original, criado_em) VALUES (?, ?, ?, ?, ?)', req.user.id, crypto.randomBytes(16).toString('hex') + EXTENSAO[f.mimetype], f.mimetype, f.originalname, agora());
-      await run('INSERT INTO envio_ficheiros (envio_id, conteudo) VALUES (?, ?)', id, f.buffer);
+      await run('INSERT INTO envio_ficheiros (envio_id, conteudo) VALUES (?, ?)', id, cifrarBytes(f.buffer));
       try {
         const lidos = await lerTaloes(f.buffer, f.mimetype);
         await tx(async () => {
@@ -689,7 +690,7 @@ app.post('/taloes/enviar', exigirLogin, (req, res, next) => {
             await run(
               `INSERT INTO taloes (envio_id, tipo, tpa, data, hora, valor, cartao, ultimos4, reservas, reserva_lida, duvidoso)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              id, t.tipo, t.tpa, t.data, t.hora, t.valor, t.cartao, t.ultimos4, t.reserva, t.reserva, t.duvidoso ? 1 : 0,
+              id, t.tipo, t.tpa, t.data, t.hora, t.valor, cifrarTexto(t.cartao), cifrarTexto(t.ultimos4), t.reserva, t.reserva, t.duvidoso ? 1 : 0,
             );
           }
         });
@@ -817,13 +818,13 @@ app.post('/envios/:id', exigirLogin, carregarEnvio, async (req, res) => {
         mantidos.add(t.id);
         await run(
           `UPDATE taloes SET tipo = ?, tpa = ?, data = ?, hora = ?, valor = ?, cartao = ?, ultimos4 = ?, reservas = ?, reserva_origem = ?, duvidoso = 0 WHERE id = ?`,
-          t.tipo, t.tpa, t.data, t.hora, t.valor, t.cartao, t.ultimos4, t.reservas, t.reserva_origem, t.id,
+          t.tipo, t.tpa, t.data, t.hora, t.valor, cifrarTexto(t.cartao), cifrarTexto(t.ultimos4), t.reservas, t.reserva_origem, t.id,
         );
       } else {
         await run(
           `INSERT INTO taloes (envio_id, tipo, tpa, data, hora, valor, cartao, ultimos4, reservas, reserva_lida, reserva_origem)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?)`,
-          envio.id, t.tipo, t.tpa, t.data, t.hora, t.valor, t.cartao, t.ultimos4, t.reservas, t.reserva_origem,
+          envio.id, t.tipo, t.tpa, t.data, t.hora, t.valor, cifrarTexto(t.cartao), cifrarTexto(t.ultimos4), t.reservas, t.reserva_origem,
         );
       }
       await run('INSERT INTO tpas (numero) VALUES (?) ON CONFLICT DO NOTHING', t.tpa);
@@ -951,11 +952,13 @@ app.post('/config/utilizadores/:id/password', exigirAuditor, async (req, res, ne
   res.redirect('/config/utilizadores?ok=password');
 });
 
+if (SEM_ESTADO && !cifraAtiva) console.warn('Aviso: sem ENCRYPTION_KEY os dados sensíveis (cartões, detalhes, ficheiros dos talões) ficam sem encriptar na base de dados.');
+
 // Verificação do serviço (e da ligação à base de dados), sem sessão: útil para ver se o deploy está bem.
 app.get('/saude', async (req, res) => {
   try {
     await get('SELECT 1 AS ok');
-    res.json({ ok: true, baseDeDados: DESTINO === 'postgres' ? 'postgres' : 'local' });
+    res.json({ ok: true, baseDeDados: DESTINO === 'postgres' ? 'postgres' : 'local', encriptacao: cifraAtiva });
   } catch (erro) {
     console.error('Falha na verificação da base de dados:', erro.message);
     res.status(503).json({ ok: false });
@@ -998,6 +1001,7 @@ const porta = Number(process.env.PORT) || 3000;
 if (!SEM_ESTADO) {
   app.listen(porta, () => {
     console.log(`Auditoria de caixas a correr em http://localhost:${porta}`);
+    console.log(`  Encriptação dos dados sensíveis: ${cifraAtiva ? 'ligada' : 'DESLIGADA (defina ENCRYPTION_KEY)'}`);
     console.log(`  Base de dados: ${DESTINO === 'postgres' ? 'Postgres do DATABASE_URL (Supabase)' : 'Postgres local (data/pglite) — defina DATABASE_URL no .env para usar o Supabase'}`);
     for (const redes of Object.values(os.networkInterfaces())) {
       for (const r of redes || []) if (r.family === 'IPv4' && !r.internal) console.log(`  Na rede local: http://${r.address}:${porta}`);

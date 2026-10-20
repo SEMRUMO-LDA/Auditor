@@ -60,6 +60,22 @@ A app corre como função da Vercel (o `server.js` exporta a aplicação e o `ve
 
 Limites na Vercel: cada ficheiro carregado pode ter até 4 MB (limite de 4,5 MB por pedido da plataforma), a função tem 60 s por pedido, e a cada função corresponde uma única ligação à base de dados. O limite de tentativas de login guarda-se na base de dados, por isso vale entre instâncias.
 
+## Encriptação dos dados
+
+Em trânsito, a ligação ao Supabase e o site na Vercel usam TLS/HTTPS; em repouso, o Supabase e a Vercel encriptam os discos. Além disso, a app encripta com **AES-256-GCM**, antes de os gravar na base de dados, os dados mais sensíveis:
+
+- os dados do cartão dos talões (`taloes.cartao`, `taloes.ultimos4`);
+- o detalhe das inconsistências (`inconsistencias.detalhe_json`: nomes de hóspedes, reservas e cartões);
+- as fotografias e PDF dos talões (`envio_ficheiros.conteudo`).
+
+Quem aceder à base de dados (painel do Supabase, cópias de segurança) só vê texto cifrado; a app decifra ao ler. As palavras-passe dos utilizadores já ficam apenas como hash (scrypt).
+
+1. Crie uma chave: `npm run encriptar -- --gerar`. Guarde uma cópia num gestor de palavras-passe: **sem a chave, os dados encriptados não se recuperam**.
+2. Defina `ENCRYPTION_KEY` no `.env` **e** nas variáveis da Vercel (marcada *Sensitive*). Tem de ser a mesma nos dois sítios.
+3. Faça deploy e corra `npm run encriptar`: encripta o que já estava gravado em claro (é seguro repetir, e confirma que cada valor volta ao original antes de gravar). `npm run encriptar -- --estado` mostra quantos valores estão cifrados.
+
+Os dados novos ficam cifrados assim que a chave estiver definida; os antigos continuam a ler-se até serem encriptados. Para trocar de chave: ponha a antiga em `ENCRYPTION_KEY_ANTERIOR`, a nova em `ENCRYPTION_KEY` e corra `npm run encriptar -- --rodar`. Como os campos cifrados não se podem pesquisar na base de dados, nenhum deles é usado em filtros ou ordenações (nomes de hóspedes, quartos e reservas em tabelas como `faturas` e `reservas` não estão cifrados pela app, porque a pesquisa e os cruzamentos dependem deles).
+
 ## Leitura automática dos talões
 
 Copie `.env.example` para `.env` e preencha `ANTHROPIC_API_KEY`. Sem chave a aplicação funciona, mas quem envia o talão tem de preencher os dados à mão. As fotografias são enviadas para a API da Anthropic para leitura.

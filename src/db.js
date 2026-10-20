@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ESQUEMA, SEGURANCA } from './esquema.js';
+import { decifrarLinha } from './cifra.js';
 
 export const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(import.meta.dirname, '..', 'data'));
 // Os talões novos ficam na base de dados. Esta pasta só serve para ler os ficheiros antigos (de antes dessa mudança).
@@ -112,7 +113,9 @@ async function consultar(sql, ps) {
   if (m && process.env.DEBUG_SQL === '2') console.log(`   SQL> ${sql.replace(/\s+/g, ' ').slice(0, 110)}`);
   const inicio = m ? performance.now() : 0;
   try {
-    return await ligacao.query(paraPostgres(sql), limpar(ps));
+    const r = await ligacao.query(paraPostgres(sql), limpar(ps));
+    r.rows?.forEach(decifrarLinha); // colunas cifradas (ver cifra.js) voltam a texto/bytes
+    return r;
   } finally {
     if (m) {
       m.consultas++;

@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { all, get, run, tx, DATA_DIR, UPLOAD_DIR } from './db.js';
 import { TABELAS } from './esquema.js';
+import { cifrarColuna, cifrarBytes } from './cifra.js';
 
 const LOTE = 400; // linhas por INSERT
 
@@ -53,7 +54,7 @@ export async function migrar({ origem, substituir = false }) {
         for (let i = 0; i < linhas.length; i += LOTE) {
           const grupo = linhas.slice(i, i + LOTE);
           const marcadores = grupo.map(() => `(${colunas.map(() => '?').join(', ')})`).join(', ');
-          const valores = grupo.flatMap((l) => colunas.map((c) => (l[c] === undefined ? null : l[c])));
+          const valores = grupo.flatMap((l) => colunas.map((c) => cifrarColuna(c, l[c] === undefined ? null : l[c])));
           await run(`INSERT INTO ${tabela} (${colunas.join(', ')}) OVERRIDING SYSTEM VALUE VALUES ${marcadores}`, ...valores);
         }
         // os ids copiados à mão obrigam a acertar a sequência, para os próximos ids não colidirem
@@ -84,7 +85,7 @@ export async function importarFicheirosLocais() {
   for (const e of pendentes) {
     const origem = path.join(UPLOAD_DIR, path.basename(e.ficheiro));
     if (!fs.existsSync(origem)) continue;
-    await run('INSERT INTO envio_ficheiros (envio_id, conteudo) VALUES (?, ?) ON CONFLICT (envio_id) DO NOTHING', e.id, fs.readFileSync(origem));
+    await run('INSERT INTO envio_ficheiros (envio_id, conteudo) VALUES (?, ?) ON CONFLICT (envio_id) DO NOTHING', e.id, cifrarBytes(fs.readFileSync(origem)));
     copiados++;
   }
   return copiados;

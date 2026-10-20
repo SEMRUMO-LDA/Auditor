@@ -7,6 +7,7 @@ import path from 'node:path';
 
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'auditoria-teste-'));
 process.env.PGLITE_MEMORIA = '1';
+process.env.ENCRYPTION_KEY = 'b'.repeat(64); // o cruzamento tem de funcionar com a encriptação ligada
 delete process.env.DATABASE_URL;
 const db = await import('../src/db.js');
 const { reconciliar } = await import('../src/reconcile.js');

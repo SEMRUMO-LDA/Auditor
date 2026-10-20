@@ -9,7 +9,8 @@
     "importar": "node --disable-warning=ExperimentalWarning importar.js",
     "test": "node --disable-warning=ExperimentalWarning --test",
     "migrar": "node --disable-warning=ExperimentalWarning scripts/migrar-sqlite.js",
-    "esquema": "node --disable-warning=ExperimentalWarning scripts/esquema.js"
+    "esquema": "node --disable-warning=ExperimentalWarning scripts/esquema.js",
+    "encriptar": "node --disable-warning=ExperimentalWarning scripts/encriptar.js"
   },
   "engines": {
     "node": ">=22.13"

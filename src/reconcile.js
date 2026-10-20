@@ -1,6 +1,7 @@
 // Cruzamento de um dia: diário de caixa x faturas x talões TPA.
 // Só deteta e regista inconsistências; nunca altera os dados de origem.
 import { all, get, run, tx, agora, config } from './db.js';
+import { cifrarTexto } from './cifra.js';
 import { MEIO_NUMERARIO, totalContado } from './numerario.js';
 
 export const SEM_AGENCIA = '(direto)';
@@ -581,7 +582,7 @@ async function guardar(data, achadas) {
     await run('UPDATE inconsistencias SET ativa = 0 WHERE data = ?', data);
     for (let i = 0; i < achadas.length; i += LOTE_INCS) {
       const lote = achadas.slice(i, i + LOTE_INCS);
-      const valores = lote.flatMap((a) => [data, a.tipo, a.chave, a.gravidade, a.titulo, JSON.stringify(a.detalhe || {}), a.utilizador || null, a.caixa || null, a.valor ?? null, quando, quando]);
+      const valores = lote.flatMap((a) => [data, a.tipo, a.chave, a.gravidade, a.titulo, cifrarTexto(JSON.stringify(a.detalhe || {})), a.utilizador || null, a.caixa || null, a.valor ?? null, quando, quando]);
       await run(
         `INSERT INTO inconsistencias (data, tipo, chave, gravidade, titulo, detalhe_json, utilizador, caixa, valor, ativa, criada_em, atualizada_em)
          VALUES ${lote.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)').join(', ')}
