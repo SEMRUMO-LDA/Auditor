@@ -65,7 +65,6 @@ const ICONES = {
   taloes: '<path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 17.5v-11"/>',
   novo: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/>',
   meus: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
-  extratos: '<path d="M10 18v-7"/><path d="M11.12 2.198a2 2 0 0 1 1.76.006l7.866 3.847c.476.233.31.949-.22.949H3.474c-.53 0-.695-.716-.22-.949z"/><path d="M14 18v-7"/><path d="M18 18v-7"/><path d="M3 22h18"/><path d="M6 18v-7"/>',
   config: '<path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/>',
 };
 const icone = (chave) => h`<svg class="icone" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${raw(ICONES[chave])}</svg>`;
@@ -265,14 +264,6 @@ function gruposDeMeios(porMeio) {
 const chipsTaloes = (lista) => h`<div class="taloes-meio">${lista.map((x) => h`<a class="chip-talao" href="/envios/${x.envio_id}" title="Talão ${x.id}: ${euros(x.valor)}">#${x.id}</a>`)}</div>`;
 const tagValidacao = (dif) => (dif === 0 ? h`<span class="tag ok">Bate certo</span>` : h`<span class="tag falta">${dif > 0 ? 'Sobram' : 'Faltam'} ${euros(Math.abs(dif) / 100)}</span>`);
 
-// Resumo do comprovativo bancário (transferências, Booking, Stripe) para a tabela geral.
-function celulasExtrato(e, diario) {
-  const exigidos = e.itens.filter((i) => i.estado !== 'anulado');
-  const confirmados = exigidos.filter((i) => i.estado === 'confirmado').length;
-  if (!e.temExtratos) return h`<td><span class="suave">sem extratos</span></td><td class="num">${traco}</td><td><span class="tag suave">Por validar</span></td>`;
-  return h`<td><span class="suave">${confirmados} de ${exigidos.length} pagamentos</span></td><td class="num">${euros(e.comprovado / 100)}</td><td>${tagValidacao(e.comprovado - e.exigido)}</td>`;
-}
-
 function linhasMeios(analise, fecho, numerario, meios, validacao) {
   const comFaturas = Boolean(fecho.faturas_ficheiro);
   const porTipo = new Map(meios.map((m) => [m.tipo, m]));
@@ -297,7 +288,7 @@ function linhasMeios(analise, fecho, numerario, meios, validacao) {
     const r = resumo(a);
     if (!a.tpa) {
       linhas.push(h`<tr class="${destaque(r.diario, r.faturas)}"><td>${a.tipo}${a.tipo === MEIO_NUMERARIO ? h` <a class="tag ${estadoNumerario(numerario).classe}" href="/fechos/${fecho.data}?contagem=1#numerario" data-abrir-contagem title="Abrir a contagem de numerário">${estadoNumerario(numerario).rotulo}</a>` : ''}</td>
-        ${valores(r.n, r.diario, r.faturas)}${a.extrato ? celulasExtrato(a.extrato, r.diario) : h`<td>${traco}</td><td class="num">${traco}</td><td>${traco}</td>`}${celulaValidar(canalDoMeio(a.tipo, false))}</tr>`);
+        ${valores(r.n, r.diario, r.faturas)}<td>${traco}</td><td class="num">${traco}</td><td>${traco}</td>${celulaValidar(canalDoMeio(a.tipo, false))}</tr>`);
     } else if (!grupoFeito) {
       grupoFeito = true;
       const filhos = analise.porMeio.filter((x) => x.tpa).map(resumo);
@@ -319,8 +310,7 @@ const ROTULOS_VALIDACAO = {
   taloes: 'Talões (pay slips) = diário',
   pagamentos: 'Cada pagamento tem o seu talão',
   terminal: 'Terminal (nº do TPA) = caixa do pagamento',
-  extrato: 'Cada pagamento tem comprovativo no extrato',
-  extratoTotal: 'Valor comprovado no extrato = diário',
+
   contagem: 'Contagem de notas e moedas = diário',
 };
 const iconeCelula = (ok) => (ok === true ? ICONE_OK : ok === false ? ICONE_ERRO : ICONE_RELOGIO);
@@ -359,52 +349,20 @@ function tabelaTaloesDoMeio(taloes, ctx, data) {
   </table></div>`;
 }
 
-// Comprovativo no extrato de cada pagamento, com os botões para confirmar ou ligar à mão.
-const linkLinha = (l) => h`<a class="chip-talao" href="/extratos/${l.extrato_id}#l${l.id}" title="${l.descricao}">E${l.extrato_id}·${l.id}</a>`;
-function formAssociacao(item, banco, a, linha, rotulo) {
-  return h`<input type="hidden" name="data" value="${item.data}"><input type="hidden" name="doc" value="${item.doc}"><input type="hidden" name="valor_cent" value="${item.c}"><input type="hidden" name="meio" value="${a.chave}">${linha}`;
-}
-function celulaExtrato(i, banco, a) {
-  if (!i) return h`<td>${traco}</td>`;
-  if (i.estado === 'anulado') return h`<td><span class="suave">Anulado (nota de crédito)</span></td>`;
-  if (i.estado === 'nota') return h`<td>${etiqueta('falta', 'Nota de crédito sem pagamento')}</td>`;
-  if (!banco.temExtratos) return h`<td><span class="suave">Sem extratos carregados</span></td>`;
-  const remover = i.origem === 'manual' ? h`<form method="post" action="/extratos/desassociar" class="linha">${formAssociacao(i, banco, a, '')}<button class="link">Remover</button></form>` : '';
-  if (i.estado === 'confirmado') {
-    const l = i.banco;
-    const texto = i.direto ? h`Crédito Booking.com de ${euros(l.valor)} a ${dataPT(l.data)}, confirmado pelo auditor` : i.kind === 'transferencia'
-      ? h`${dataPT(l.data)} · ${l.descricao}`
-      : h`${i.detalhe.referencia || i.detalhe.descricao}${i.detalhe.grupo_data ? ` · pago a ${dataPT(i.detalhe.grupo_data)}` : ''} · crédito de ${euros(l.lote.total / 100)} a ${dataPT(l.data)}`;
-    return h`<td><div class="taloes-meio">${etiqueta('ok', i.origem === 'manual' ? 'Confirmado à mão' : 'Confirmado')}${linkLinha(l)}</div><small class="suave">${texto}</small>${remover}</td>`;
-  }
-  if (i.estado === 'parcial') {
-    return h`<td><div class="taloes-meio">${etiqueta('falta', 'Sem crédito no extrato')}${linkLinha(i.detalhe)}</div><small class="suave">${i.detalhe.referencia || ''} está no relatório${i.detalhe.grupo_data ? `, pagamento de ${dataPT(i.detalhe.grupo_data)}` : ''}, mas o lote não entrou no banco</small>${remover}</td>`;
-  }
-  if (i.estado === 'provavel') {
-    return h`<td><div class="taloes-meio">${etiqueta('aviso', 'Provável')}${linkLinha(i.detalhe)}</div><small class="suave">${i.detalhe.descricao}</small>
-      <form method="post" action="/extratos/associar" class="linha">${formAssociacao(i, banco, a, h`<input type="hidden" name="linha_id" value="${i.detalhe.id}">`)}<button>Confirmar</button></form></td>`;
-  }
-  if (i.estado === 'ambiguo') {
-    return h`<td>${etiqueta('aviso', 'Várias hipóteses')}
-      <form method="post" action="/extratos/associar" class="linha">${formAssociacao(i, banco, a, h`<select name="linha_id" required aria-label="Linha do extrato"><option value="">Escolher…</option>${i.candidatos.map((c) => h`<option value="${c.linha.id}">${dataPT(c.linha.data)} · ${c.linha.descricao.slice(0, 40)}</option>`)}</select>`)}<button>Associar</button></form></td>`;
-  }
-  return h`<td>${etiqueta('falta', 'Sem comprovativo')}</td>`;
-}
-
 // Legenda da cor das notas de crédito (a mesma dos Diários).
 const legendaNC = h`<p class="suave legenda"><span class="amostra nc"></span> Reserva com nota de crédito no mesmo dia (fatura anulada ou reemitida)</p>`;
 
-function tabelaMovimentosDoMeio(a, comFaturas, comTalao, banco = null) {
+function tabelaMovimentosDoMeio(a, comFaturas, comTalao) {
   if (!a.movimentos.length && !a.faturasSemMovimento.length) return h`<p class="vazio">Sem movimentos neste meio.</p>`;
   const temNC = a.movimentos.some((m) => m.comNC) || a.faturasSemMovimento.some((f) => f.comNC);
   return h`${temNC ? legendaNC : ''}<div class="tabela-wrap"><table>
-  <thead><tr><th>Documento</th><th>Reserva</th><th>Hora</th><th>Quarto</th><th>Hóspede</th><th>Caixa</th><th class="num">Valor (diário)</th><th>Fatura</th>${comTalao ? h`<th>Talão</th>` : ''}${banco ? h`<th>Comprovativo no extrato</th>` : ''}</tr></thead>
+  <thead><tr><th>Documento</th><th>Reserva</th><th>Hora</th><th>Quarto</th><th>Hóspede</th><th>Caixa</th><th class="num">Valor (diário)</th><th>Fatura</th>${comTalao ? h`<th>Talão</th>` : ''}</tr></thead>
   <tbody>${a.movimentos.map((m) => h`<tr class="${m.comNC ? 'nc' : comFaturas && !m.fatura ? 'destaque' : ''}"><td>${m.doc}</td><td class="reserva">${m.reserva}</td><td>${m.hora}</td><td>${m.quarto}</td><td>${m.nome}</td><td>${m.caixa}</td>
     <td class="num">${euros(m.valor)}</td>
     <td>${comFaturas ? (m.fatura ? etiqueta('ok', 'Fatura confere') : etiqueta('falta', 'Sem fatura')) : traco}</td>
-    ${comTalao ? h`<td>${m.anulado ? h`<span class="suave">Anulado (nota de crédito)</span>` : m.taloes.length ? chipsTaloes(m.taloes) : m.c > 0 ? etiqueta('falta', 'Sem talão') : traco}</td>` : ''}${banco ? celulaExtrato(banco.itens.get(`${banco.data}|${m.doc}|${m.c}`), banco, a) : ''}</tr>`)}
+    ${comTalao ? h`<td>${m.anulado ? h`<span class="suave">Anulado (nota de crédito)</span>` : m.taloes.length ? chipsTaloes(m.taloes) : m.c > 0 ? etiqueta('falta', 'Sem talão') : traco}</td>` : ''}</tr>`)}
   ${a.faturasSemMovimento.map((f) => h`<tr class="${f.comNC ? 'nc' : 'destaque'}"><td>${f.doc}</td><td class="reserva">${f.reserva}</td><td>${traco}</td><td>${f.quarto}</td><td>${f.hospede}</td><td>${traco}</td><td class="num">${traco}</td>
-    <td>${etiqueta('falta', `Fatura sem movimento · ${euros(f.valor)}`)}</td>${comTalao ? h`<td>${traco}</td>` : ''}${banco ? h`<td>${traco}</td>` : ''}</tr>`)}</tbody>
+    <td>${etiqueta('falta', `Fatura sem movimento · ${euros(f.valor)}`)}</td>${comTalao ? h`<td>${traco}</td>` : ''}</tr>`)}</tbody>
   </table></div>`;
 }
 
@@ -435,7 +393,7 @@ function subPainel(g, fecho, numerario, fechosTPA, ctx) {
   const movs = itens.reduce((s, a) => s + a.movimentos.length, 0);
   const ehTPA = g.chave === 'tpa';
   const ehNumerario = !ehTPA && itens[0].tipo === MEIO_NUMERARIO;
-  const ehBancario = !ehTPA && Boolean(itens[0].extrato);
+
   const canal = ehTPA ? 'tpa' : canalDoMeio(itens[0].tipo, false);
   const validar = canal && ctx.validacao.canais[canal];
   return h`<div class="subpainel" id="subpainel-${g.chave}" data-subpainel="${g.chave}" role="tabpanel">
@@ -446,24 +404,22 @@ function subPainel(g, fecho, numerario, fechosTPA, ctx) {
     <div class="${comFaturas && diario !== faturado ? 'alerta' : ''}"><span>Diferença</span><strong>${comFaturas ? euros((faturado - diario) / 100) : '—'}</strong></div>
     ${validar && validar.valor ? h`<div class="valida-card ${validar.validado ? 'validado' : ''}"><span>Validação do auditor</span>${formValidar(fecho.data, canal, validar, validar.validado ? 'Valor validado' : 'Validar este valor', { origem: 'dia' })}</div>` : ''}
     ${ehTPA ? h`<div class="${soma('taloesSoma') !== diario ? 'alerta' : ''}"><span>Talões (pay slips)</span><strong>${euros(soma('taloesSoma') / 100)}</strong></div>` : ''}
-    ${ehBancario ? h`<div class="${itens[0].extrato.comprovado !== itens[0].extrato.exigido ? 'alerta' : ''}"><span>Comprovado no extrato</span><strong>${itens[0].extrato.temExtratos ? euros(itens[0].extrato.comprovado / 100) : '—'}</strong></div>` : ''}
   </div>
   <h3>Validações <span class="suave">${contagemValidacoes(itens)}</span></h3>
   ${matrizValidacoes(itens)}
-  ${ehBancario && !itens[0].extrato.temExtratos ? h`<p class="aviso info">Ainda não há extratos carregados. <a href="/extratos">Carregue o extrato bancário ou o relatório de pagamentos</a> para comprovar estes pagamentos.</p>` : ''}
   ${ehTPA ? itens.map((a) => h`<h3>${a.tipo} — talões (pay slips) que comprovam o valor</h3>
     ${tabelaTaloesDoMeio(a.taloes, ctx, fecho.data)}
     <h3>${a.tipo} — pagamentos do diário e talão de cada um</h3>
     ${tabelaMovimentosDoMeio(a, comFaturas, true)}`) : h`${ehNumerario ? contagemNumerario(numerario, fecho.data) : ''}
-    <h3>${ehBancario ? 'Pagamentos do diário e comprovativo no extrato' : 'Movimentos do diário e fatura de cada um'}</h3>
-    ${tabelaMovimentosDoMeio(itens[0], comFaturas, false, itens[0].extrato ? { ...ctx.bancario.dia, temExtratos: ctx.bancario.temExtratos, data: fecho.data, itens: ctx.bancario.dia.itens } : null)}`}
+    <h3>Movimentos do diário e fatura de cada um</h3>
+    ${tabelaMovimentosDoMeio(itens[0], comFaturas, false)}
+`}
   ${ehTPA ? h`<h3>Fechos dos terminais <span class="suave">talão de fecho de cada terminal contra os pagamentos TPA do diário nas caixas a que pertence</span></h3>
     ${fechosTPA.length ? h`<div class="tabela-wrap"><table>
-      <thead><tr><th>ID</th><th>Hora</th><th>Terminal (nº do TPA)</th><th>Caixa</th><th class="num">Valor do fecho</th><th>Crédito no banco</th><th class="num">Diário TPA da caixa</th><th>Validação</th></tr></thead>
+      <thead><tr><th>ID</th><th>Hora</th><th>Terminal (nº do TPA)</th><th>Caixa</th><th class="num">Valor do fecho</th><th class="num">Diário TPA da caixa</th><th>Validação</th></tr></thead>
       <tbody>${fechosTPA.map((t) => h`<tr><td><a class="chip-talao" href="/envios/${t.envio_id}">#${t.id}</a></td><td>${t.hora}</td><td>${celulaTerminal(t.tpa, ctx)}</td>
         <td>${t.caixas.length ? t.caixas.map((c) => etiqueta('suave', c)) : formAssociar(t.terminal, ctx, fecho.data)}</td>
         <td class="num">${euros(t.valor)}</td>
-        <td>${t.valor === 0 ? traco : t.credito ? h`${etiqueta('ok', `${euros(t.credito.linha.valor)} · ${dataPT(t.credito.linha.data)}`)} ${linkLinha(t.credito.linha)}<br><small class="suave">comissão ${euros(t.credito.comissao / 100)}</small>` : t.temCreditos ? etiqueta('falta', 'Sem crédito no extrato') : h`<span class="suave">Sem extratos</span>`}</td>
         <td class="num">${t.grupo ? euros(t.grupo.diario / 100) : traco}</td>
         <td>${t.grupo ? (t.grupo.fecho === t.grupo.diario ? etiqueta('ok', 'Bate certo') : etiqueta('falta', `${t.grupo.fecho > t.grupo.diario ? 'Sobram' : 'Faltam'} ${euros(Math.abs(t.grupo.fecho - t.grupo.diario) / 100)}${t.grupo.terminais.length > 1 ? ` · grupo ${t.grupo.terminais.join(' + ')}` : ''}`)) : h`<span class="suave">Associe o terminal a uma caixa</span>`}</td></tr>`)}</tbody></table></div>` : h`<p class="vazio">Nenhum talão de fecho enviado para este dia.</p>`}` : ''}
 </div>`;
@@ -523,14 +479,14 @@ function blocoNumerario(fecho, n) {
 }
 
 export function fechoPage(user, d) {
-  const { fecho, totais, meios, porUtilizador, porAlojamento, pendentesSemAlojamento, analise, bancario, fechosTPA, terminaisPorNumero, caixasLista, incs, filtros, opcoes, taloes, contagem, reservas, numerario, validacao, apagarTexto } = d;
+  const { fecho, totais, meios, porUtilizador, porAlojamento, pendentesSemAlojamento, analise, fechosTPA, terminaisPorNumero, caixasLista, incs, filtros, opcoes, taloes, contagem, reservas, numerario, validacao, apagarTexto } = d;
   const dif = totais.faturas - totais.diario;
   const grupos = gruposDeMeios(analise.porMeio);
   const totalIncs = (contagem.pendente || 0) + (contagem.justificada || 0) + (contagem.resolvida || 0);
   // Comprovativos: contagem de notas e moedas (CASH), talões nos meios TPA e faturas nos restantes meios.
   const diarioC = Math.round(totais.diario * 100);
   const faturasC = Math.round(totais.faturas * 100);
-  const comprovativosC = analise.porMeio.reduce((s, a) => s + (a.tipo === MEIO_NUMERARIO ? (numerario.existe ? numerario.contado : 0) : a.tpa ? a.taloesSoma : a.extrato ? (a.extrato.temExtratos ? a.extrato.comprovado : 0) : a.faturado), 0);
+  const comprovativosC = analise.porMeio.reduce((s, a) => s + (a.tipo === MEIO_NUMERARIO ? (numerario.existe ? numerario.contado : 0) : a.tpa ? a.taloesSoma : a.faturado), 0);
   const caixaCorreta = Boolean(fecho.diario_ficheiro && fecho.faturas_ficheiro) && diarioC === faturasC && faturasC === comprovativosC && !contagem.pendente;
   const colunasMeios = meios.filter((m) => porAlojamento.some((a) => m.tipo in a.porMeio));
   const colunasMeiosUtil = meios.filter((m) => porUtilizador.some((u) => m.tipo in u.porMeio));
@@ -546,7 +502,7 @@ export function fechoPage(user, d) {
 <div class="indicadores indicadores-fecho">
   <div class="${validacao.validado ? 'valido-auditor' : ''}" title="${validacao.validado ? 'Todos os valores foram validados pelo auditor' : `Validados pelo auditor: ${validacao.validados} de ${validacao.exigidos}`}"><span>Total do diário${validacao.validado ? ' · validado' : validacao.validados ? ` · ${validacao.validados}/${validacao.exigidos} validados` : ''}</span><strong>${validacao.validado ? h`<span class="visto" aria-hidden="true">✓</span> ` : ''}${euros(totais.diario)}</strong></div>
   <div class="${fecho.faturas_ficheiro && faturasC !== diarioC ? 'alerta' : ''}"><span>Total das faturas</span><strong>${fecho.faturas_ficheiro ? euros(totais.faturas) : '—'}</strong></div>
-  <div class="${comprovativosC !== diarioC ? 'alerta' : ''}" title="Contagem de notas e moedas (CASH) + talões dos meios TPA + extratos bancários e relatórios de pagamentos (transferências, Booking.com, Stripe)"><span>Total dos comprovativos</span><strong>${euros(comprovativosC / 100)}</strong></div>
+  <div class="${comprovativosC !== diarioC ? 'alerta' : ''}" title="Contagem de notas e moedas (CASH) + talões dos meios TPA + faturas dos restantes meios"><span>Total dos comprovativos</span><strong>${euros(comprovativosC / 100)}</strong></div>
   ${caixaCorreta
     ? h`<div class="certo"><span>Caixa correta${totalIncs ? ` · ${totalIncs} inconsistência(s) tratada(s)` : ''}</span><strong>Tudo confere</strong></div>`
     : h`<div class="${contagem.pendente ? 'alerta' : ''}"><span>Inconsistências${contagem.pendente ? h` · ${contagem.pendente} pendente(s)` : ''}</span><strong>${totalIncs}</strong></div>`}
@@ -580,7 +536,7 @@ ${caixaCorreta ? h`<p class="aviso ok caixa-correta">O total do diário, o total
     ${analise.taloesSemMeio.length ? aviso(`${analise.taloesSemMeio.length} talão(ões) de compra sem fatura associada ficam fora da validação por meio: ${analise.taloesSemMeio.map((t) => '#' + t.id).join(', ')}.`, 'info') : ''}
   </div>
 
-  ${grupos.map((g) => subPainel(g, fecho, numerario, fechosTPA, { terminais: terminaisPorNumero, caixas: caixasLista, bancario, validacao }))}
+  ${grupos.map((g) => subPainel(g, fecho, numerario, fechosTPA, { terminais: terminaisPorNumero, caixas: caixasLista, validacao }))}
   ${blocoNumerario(fecho, numerario)}
 </section>
 
@@ -647,60 +603,6 @@ function seletorPeriodo(de, ate, diasComDados = []) {
   </label>
   <div class="periodo-painel" role="dialog" aria-label="Escolher período" hidden></div>
 </div>`;
-}
-
-// ---------- Extratos bancários e relatórios de pagamentos ----------
-const TIPO_EXTRATO = { banco: 'Extrato bancário', stripe: 'Relatório Stripe', booking: 'Relatório Booking.com' };
-const CATEGORIA_LINHA = { transferencia: ['suave', 'Transferência'], booking: ['ok', 'Booking.com'], stripe: ['ok', 'Stripe'], comerciante: ['ok', 'Terminal TPA'], detalhe: ['suave', 'Reserva'], payout: ['ok', 'Payout'], outro: ['suave', 'Outro'] };
-
-export function extratosPage(user, extratos, resultados) {
-  return pagina(user, 'Extratos', h`
-<div class="cabecalho"><div><h1>Extratos</h1><p class="suave">Os documentos que comprovam as transferências: extrato bancário (só os créditos; os débitos são ignorados), relatório de pagamentos da Booking.com e relatório de payouts do Stripe.</p></div></div>
-${resultados && h`<div class="cartao">
-  <h2>Resultado do carregamento</h2>
-  <ul class="resultados">${resultados.map((r) => r.erro
-    ? h`<li class="erro"><strong>${r.nome}</strong><span>${r.erro}</span></li>`
-    : h`<li class="${r.novas ? 'ok' : 'pend'}"><strong>${r.nome}</strong><span>${TIPO_EXTRATO[r.tipo]} · ${dataPT(r.de)} a ${dataPT(r.ate)} · ${r.novas} crédito(s) novo(s)${r.repetidas ? `, ${r.repetidas} já existiam` : ''}${r.debitos ? ` · ${r.debitos} débito(s) ignorado(s)` : ''}</span>
-      <small>Colunas reconhecidas: ${Object.entries(r.colunas || {}).map(([k, x]) => `${k} = «${x}»`).join(' · ')}</small></li>`)}</ul>
-</div>`}
-<form method="post" action="/extratos" enctype="multipart/form-data" class="cartao">
-  <h2>Carregar extratos</h2>
-  <p class="suave">Aceita CSV e Excel (.xlsx). O tipo é reconhecido pelo conteúdo; se falhar, escolha-o abaixo. Pode carregar vários ficheiros de uma vez e extratos que se sobrepõem (as linhas repetidas são ignoradas).</p>
-  <div class="grelha">
-    <label>Ficheiros <input type="file" name="ficheiros" accept=".csv,.xlsx,.xls,.txt" multiple required></label>
-    <label>Tipo <select name="tipo"><option value="">Reconhecer sozinho</option><option value="banco">Extrato bancário</option><option value="booking">Relatório Booking.com</option><option value="stripe">Relatório Stripe</option></select></label>
-  </div>
-  <button class="primario">Carregar</button>
-</form>
-<h2>Extratos carregados <span class="suave">${extratos.length}</span></h2>
-${extratos.length === 0 ? h`<p class="vazio">Ainda não há extratos. Sem eles, as transferências, a Booking.com e o Stripe ficam por validar.</p>` : h`
-<div class="tabela-wrap"><table>
-<thead><tr><th>ID</th><th>Tipo</th><th>Ficheiro</th><th>Período</th><th class="num">Créditos</th><th>Carregado</th><th></th></tr></thead>
-<tbody>${extratos.map((e) => h`<tr><td><strong>E${e.id}</strong></td><td>${etiqueta('suave', TIPO_EXTRATO[e.tipo])}</td><td><a href="/extratos/${e.id}">${e.nome_original}</a></td>
-  <td>${dataPT(e.de)} – ${dataPT(e.ate)}</td><td class="num">${e.n}</td><td>${quandoPT(e.criado_em)} · ${e.enviado_por}</td>
-  <td><form method="post" action="/extratos/${e.id}/apagar" data-confirmar="Apagar este extrato e as associações feitas com ele?"><button class="link perigo">Apagar</button></form></td></tr>`)}</tbody></table></div>`}`, 'extratos');
-}
-
-export function extratoPage(user, extrato, linhas, uso) {
-  const creditos = linhas.filter((l) => l.valor > 0 && l.categoria !== 'outro' && l.categoria !== 'payout');
-  const usadas = creditos.filter((l) => uso.has(l.id)).length;
-  return pagina(user, `Extrato E${extrato.id}`, h`
-<p><a href="/extratos">← Extratos</a></p>
-<div class="cabecalho"><div><h1>E${extrato.id} · ${TIPO_EXTRATO[extrato.tipo]}</h1><p class="suave">${extrato.nome_original} · ${dataPT(extrato.de)} a ${dataPT(extrato.ate)} · carregado por ${extrato.enviado_por} em ${quandoPT(extrato.criado_em)}</p></div></div>
-<div class="indicadores">
-  <div><span>Linhas</span><strong>${linhas.length}</strong></div>
-  <div class="${creditos.length - usadas ? 'alerta' : ''}"><span>Créditos por associar</span><strong>${creditos.length - usadas}</strong></div>
-</div>
-<div class="tabela-wrap"><table>
-<thead><tr><th>Data</th><th>Descrição</th><th>Tipo</th><th class="num">Valor</th><th>Serve de comprovativo a</th></tr></thead>
-<tbody>${linhas.map((l) => {
-  const u = uso.get(l.id);
-  const [classe, rotulo] = l.categoria === 'detalhe' && extrato.tipo === 'stripe' ? ['suave', 'Cobrança'] : CATEGORIA_LINHA[l.categoria] || ['suave', l.categoria];
-  const credito = creditos.includes(l);
-  return h`<tr id="l${l.id}" class="${credito && !u ? 'destaque' : ''}"><td>${dataPT(l.data)}</td><td>${l.descricao}${l.hospede ? h` <span class="suave">${l.hospede}</span>` : ''}</td><td>${etiqueta(classe, rotulo)}</td>
-    <td class="num">${euros(l.valor)}</td>
-    <td>${u ? (u.fecho ? h`<a href="/fechos/${u.dia}#meios:tpa">Fecho do terminal ${u.tpa}</a> <span class="suave">${dataPT(u.dia)}</span>` : u.docs ? h`<a href="/fechos/${u.dia}#meios:${u.tipo.toLowerCase()}">${u.tipo} de ${dataPT(u.dia)}</a> <span class="suave">${u.docs.length} pagamento(s) do lote</span>` : h`<a href="/fechos/${u.dia}#meios:${u.tipo.toLowerCase()}">${u.tipo} · ${u.doc}</a> <span class="suave">${u.hospede}</span>`) : credito ? h`<span class="suave">Por associar</span>` : traco}</td></tr>`;
-})}</tbody></table></div>`, 'extratos');
 }
 
 // ---------- Diários (resumo geral) ----------

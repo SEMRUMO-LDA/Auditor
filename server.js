@@ -15,8 +15,8 @@ import { cifrarTexto, cifrarBytes, cifraAtiva } from './src/cifra.js';
 import { hashFicheiro, envioComFicheiro, taloesRepetidos, descreverRepetido } from './src/duplicados.js';
 import { DENOMINACOES, MAX_QUANTIDADE, MEIO_NUMERARIO, totalContado } from './src/numerario.js';
 import { analisarMeios } from './src/meios.js';
-import { lerExtrato, ErroExtrato, centimos } from './src/extratos.js';
-import { comprovativosAteDia, liquidacoesAteDia, usoDasLinhas, guardarExtrato, MEIOS_BANCARIOS } from './src/comprovativos.js';
+
+
 import { mapaValidacoes, validacaoDoDia, definirValidacao } from './src/validacao.js';
 import * as v from './src/views.js';
 
@@ -160,7 +160,7 @@ app.post('/fechos/:data/apagar', exigirAuditor, async (req, res) => {
   if (!RE_DATA.test(data) || !await get('SELECT 1 AS x FROM fechos WHERE data = ?', data)) return res.redirect('/fechos');
   await tx(async () => {
     await run('DELETE FROM inconsistencias WHERE data = ?', data); // as notas e mudanças de estado saem em cascata
-    for (const tabela of ['fecho_validacoes', 'resumo_diario', 'movimentos', 'faturas', 'reservas', 'faturas_reserva', 'contagens_numerario', 'extrato_associacoes']) {
+    for (const tabela of ['fecho_validacoes', 'resumo_diario', 'movimentos', 'faturas', 'reservas', 'faturas_reserva', 'contagens_numerario']) {
       await run(`DELETE FROM ${tabela} WHERE data = ?`, data);
     }
     await run('UPDATE taloes SET doc_associado = NULL WHERE data = ?', data);
@@ -272,7 +272,7 @@ app.get('/fechos/:data', exigirAuditor, async (req, res, next) => {
   const [
     totais, meios, porUtilizador, valoresPorUtilizador, contagemLinhas, alojamentos, alojamentosPendentes, quantidadesLinhas, esperadoNumerario,
     terminais, movimentosDia, faturasDia, taloesCompra, fechos, movimentosCartao, caixasLista, taloesDoDia,
-    bancario, liquidacoes, validacao, apagarTexto, reservas, incs, opcoes,
+    validacao, apagarTexto, reservas, incs, opcoes,
   ] = await Promise.all([
     get(
       `SELECT
@@ -313,8 +313,7 @@ app.get('/fechos/:data', exigirAuditor, async (req, res, next) => {
     all('SELECT caixa, tipo, valor FROM movimentos WHERE data = ?', data),
     all('SELECT codigo FROM caixas ORDER BY lower(codigo)'),
     all(`${SQL_TALOES} WHERE t.data = ? ORDER BY t.hora, t.id`, data),
-    comprovativosAteDia(data),
-    liquidacoesAteDia(data),
+
     validacaoDoDia(data),
     textoApagarFecho(data),
     resumoReservas(data),
@@ -369,7 +368,6 @@ app.get('/fechos/:data', exigirAuditor, async (req, res, next) => {
     temFaturas: Boolean(fecho.faturas_ficheiro),
     temDiario: numerario.temDiario,
     terminais: terminaisPorNumero,
-    bancario,
   });
   const pai = new Map();
   const raiz = (x) => {
@@ -382,7 +380,7 @@ app.get('/fechos/:data', exigirAuditor, async (req, res, next) => {
   const movimentosTPA = movimentosCartao.filter((m) => meiosTPA.has(m.tipo));
   const fechosTPA = fechos.map((f) => {
     const terminal = terminaisPorNumero.get(f.tpa) || null;
-    const base = { ...f, terminal, caixas: terminal?.caixas || [], credito: liquidacoes.mapa.get(f.id) || null, temCreditos: liquidacoes.temCreditos };
+    const base = { ...f, terminal, caixas: terminal?.caixas || [] };
     if (!base.caixas.length) return base;
     const grupo = raiz(`T:${f.tpa}`);
     const tpasDoGrupo = new Set(terminais.filter((t) => t.caixas.length && raiz(`T:${t.numero}`) === grupo).map((t) => t.numero));
@@ -394,7 +392,7 @@ app.get('/fechos/:data', exigirAuditor, async (req, res, next) => {
   const filtros = lerFiltros(req.query, { data });
   res.send(
     v.fechoPage(req.user, {
-      fecho, totais, meios, porUtilizador, porAlojamento, pendentesSemAlojamento, analise, bancario, fechosTPA, terminaisPorNumero: Object.fromEntries(terminaisPorNumero),
+      fecho, totais, meios, porUtilizador, porAlojamento, pendentesSemAlojamento, analise, fechosTPA, terminaisPorNumero: Object.fromEntries(terminaisPorNumero),
       caixasLista: caixasLista.map((c) => c.codigo), contagem, filtros, numerario,
       validacao, apagarTexto, reservas, incs, opcoes, taloes: taloesDoDia,
     }),
@@ -598,78 +596,6 @@ app.post('/inconsistencias/:id/nota', exigirAuditor, async (req, res, next) => {
     }
   });
   res.redirect(`/inconsistencias/${inc.id}#notas`);
-});
-
-// ---------- Extratos bancários e relatórios de pagamentos ----------
-const nomeUTF8 = (f) => Buffer.from(f.originalname, 'latin1').toString('utf8');
-
-async function listarExtratos() {
-  return await all(
-    `SELECT e.*, u.nome AS enviado_por, (SELECT COUNT(*) FROM extrato_linhas l WHERE l.extrato_id = e.id) AS n
-     FROM extratos e LEFT JOIN users u ON u.id = e.user_id ORDER BY e.id DESC`,
-  );
-}
-
-const ficheirosExtratos = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_FICHEIRO, files: 12 } }).array('ficheiros', 12);
-
-app.get('/extratos', exigirAuditor, async (req, res) => res.send(v.extratosPage(req.user, await listarExtratos(), null)));
-app.post('/extratos', exigirAuditor, (req, res, next) => {
-  ficheirosExtratos(req, res, async (erroUpload) => {
-    if (erroUpload) return res.status(400).send(v.extratosPage(req.user, await listarExtratos(), [{ nome: 'Carregamento', erro: `Não foi possível receber os ficheiros (máximo ${TEXTO_MAX} cada, até 12 ficheiros).` }]));
-    try {
-      const resultados = [];
-      for (const f of req.files || []) {
-        const nome = nomeUTF8(f);
-        try {
-          const lido = lerExtrato(f.buffer, String(req.body?.tipo || ''));
-          resultados.push({ nome, tipo: lido.tipo, colunas: lido.colunas, debitos: lido.debitos, de: lido.de, ate: lido.ate, total: lido.linhas.length, ...await guardarExtrato(nome, lido, req.user.id) });
-        } catch (erro) {
-          if (!(erro instanceof ErroExtrato)) throw erro;
-          resultados.push({ nome, erro: erro.message });
-        }
-      }
-      if (!resultados.length) resultados.push({ nome: 'Carregamento', erro: 'Escolha pelo menos um ficheiro.' });
-      res.status(resultados.every((r) => r.erro) ? 400 : 200).send(v.extratosPage(req.user, await listarExtratos(), resultados));
-    } catch (erro) {
-      next(erro);
-    }
-  });
-});
-app.get('/extratos/:id', exigirAuditor, async (req, res, next) => {
-  const extrato = await get('SELECT e.*, u.nome AS enviado_por FROM extratos e LEFT JOIN users u ON u.id = e.user_id WHERE e.id = ?', Number(req.params.id));
-  if (!extrato) return next();
-  const linhas = await all('SELECT * FROM extrato_linhas WHERE extrato_id = ? ORDER BY data, n, id LIMIT 5000', extrato.id);
-  res.send(v.extratoPage(req.user, extrato, linhas, await usoDasLinhas()));
-});
-app.post('/extratos/:id/apagar', exigirAuditor, async (req, res, next) => {
-  if (!await get('SELECT 1 AS x FROM extratos WHERE id = ?', Number(req.params.id))) return next();
-  await run('DELETE FROM extratos WHERE id = ?', Number(req.params.id));
-  res.redirect('/extratos');
-});
-
-// Associação feita à mão: um movimento do diário e uma linha de extrato com o mesmo valor.
-const voltaAoFecho = (req) => {
-  const data = String(req.body?.data || '');
-  const meio = /^[a-z0-9-]{1,20}$/.test(String(req.body?.meio || '')) ? req.body.meio : 'geral';
-  return RE_DATA.test(data) ? `/fechos/${data}#meios:${meio}` : '/extratos';
-};
-app.post('/extratos/associar', exigirAuditor, async (req, res) => {
-  const data = String(req.body?.data || '');
-  const cent = Number(req.body?.valor_cent);
-  const linha = await get('SELECT * FROM extrato_linhas WHERE id = ?', Number(req.body?.linha_id));
-  const doc = String(req.body?.doc || '').slice(0, 60);
-  if (RE_DATA.test(data) && doc && Number.isInteger(cent) && linha && centimos(linha.valor) === cent) {
-    await run(
-      `INSERT INTO extrato_associacoes (data, doc, valor_cent, linha_id, criado_em, user_id) VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(data, doc, valor_cent) DO UPDATE SET linha_id = excluded.linha_id, criado_em = excluded.criado_em, user_id = excluded.user_id`,
-      data, doc, cent, linha.id, agora(), req.user.id,
-    );
-  }
-  res.redirect(voltaAoFecho(req));
-});
-app.post('/extratos/desassociar', exigirAuditor, async (req, res) => {
-  await run('DELETE FROM extrato_associacoes WHERE data = ? AND doc = ? AND valor_cent = ?', String(req.body?.data || ''), String(req.body?.doc || ''), Number(req.body?.valor_cent));
-  res.redirect(voltaAoFecho(req));
 });
 
 // ---------- Talões ----------

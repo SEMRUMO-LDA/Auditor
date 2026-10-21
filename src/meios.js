@@ -1,7 +1,7 @@
 // Análise por meio de pagamento de um dia: cruza o diário de caixa com as faturas e, nos meios TPA, com os talões
 // enviados pela receção. Só lê os dados; quem decide é o auditor. Os valores são comparados em cêntimos.
 import { MEIO_NUMERARIO } from './numerario.js';
-import { MEIOS_BANCARIOS } from './comprovativos.js';
+
 
 const cent = (v) => Math.round((v ?? 0) * 100);
 const euros = (c) => (c / 100).toLocaleString('pt-PT', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
@@ -10,7 +10,7 @@ export const chaveDoMeio = (tipo) => String(tipo).toLowerCase().replace(/[^a-z0-
 
 // movimentos: linhas do diário; faturas: linhas do relatório de faturas; taloes: talões de compra (confirmados ou ainda por confirmar);
 // numerario: { existe, contado, esperado } (contagem de notas e moedas, em cêntimos).
-export function analisarMeios({ meios, movimentos, faturas, taloes, numerario, temFaturas, temDiario = true, terminais = new Map(), bancario = null }) {
+export function analisarMeios({ meios, movimentos, faturas, taloes, numerario, temFaturas, temDiario = true, terminais = new Map() }) {
   const tipoDoDoc = new Map();
   for (const m of movimentos) if (m.doc && !tipoDoDoc.has(m.doc)) tipoDoDoc.set(m.doc, m.tipo);
 
@@ -126,30 +126,6 @@ export function analisarMeios({ meios, movimentos, faturas, taloes, numerario, t
         });
       }
     }
-    // Transferências, Booking e Stripe: comprovadas pelos extratos bancários e relatórios de pagamentos.
-    const extrato = MEIOS_BANCARIOS[meio.tipo] && bancario ? bancario.dia.porTipo[meio.tipo] : null;
-    if (extrato) {
-      const itens = extrato.itens.filter((i) => i.estado !== 'anulado');
-      const conta = (estado) => itens.filter((i) => i.estado === estado).length;
-      const feitos = conta('confirmado');
-      const falta = itens.length - feitos;
-      const detalhe = [conta('parcial') && `${conta('parcial')} pago(s) mas sem crédito no extrato`, conta('provavel') && `${conta('provavel')} provável(is) por confirmar`, conta('ambiguo') && `${conta('ambiguo')} com várias hipóteses`, (conta('sem') + conta('nota')) && `${conta('sem') + conta('nota')} sem comprovativo`].filter(Boolean).join(' · ');
-      if (!bancario.temExtratos) {
-        verificacoes.push({ chave: 'extrato', ok: null, titulo: 'Sem extratos carregados', curto: 'Sem extratos', detalhe: 'Carregue o extrato bancário e o relatório de pagamentos em Extratos' });
-        verificacoes.push({ chave: 'extratoTotal', ok: null, titulo: 'Valor comprovado por validar', curto: 'Por validar', detalhe: 'Sem extratos carregados' });
-      } else {
-        verificacoes.push({
-          chave: 'extrato', ok: falta === 0,
-          titulo: falta === 0 ? 'Todos os pagamentos têm comprovativo no extrato' : `${falta} pagamento(s) sem comprovativo no extrato`,
-          curto: `${feitos} de ${itens.length}`, detalhe: falta === 0 ? 'Cada pagamento está ligado a uma linha do extrato' : detalhe,
-        });
-        verificacoes.push({
-          chave: 'extratoTotal', ok: extrato.comprovado === extrato.exigido,
-          titulo: extrato.comprovado === extrato.exigido ? 'O valor comprovado no extrato é igual ao diário' : 'O valor comprovado no extrato é diferente do diário',
-          curto: `${euros(extrato.comprovado)} de ${euros(extrato.exigido)}`, detalhe: `Comprovado ${euros(extrato.comprovado)} · Diário ${euros(extrato.exigido)}`,
-        });
-      }
-    }
     if (meio.tipo === MEIO_NUMERARIO) {
       const dif = numerario.contado - numerario.esperado;
       verificacoes.push(
@@ -170,7 +146,7 @@ export function analisarMeios({ meios, movimentos, faturas, taloes, numerario, t
       tipo: meio.tipo, tpa: Boolean(meio.tpa), chave: chaveDoMeio(meio.tipo),
       movimentos: movs, faturasSemMovimento, semFatura, semTalao,
       diario, faturado, taloes: taloesMeio, taloesSoma, verificacoes, estado,
-      extrato: extrato ? { ...extrato, temExtratos: bancario.temExtratos } : null,
+
     };
   });
   return { porMeio, taloesSemMeio };
