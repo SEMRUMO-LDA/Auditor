@@ -2,3 +2,6 @@ data
 test
 .env
 .mcp.json
+.env.local
+.env*.local
+.vercel

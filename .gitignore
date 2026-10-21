@@ -10,3 +10,9 @@ Caixa/
 .claude/
 .DS_Store
 *.log
+
+# Ligação local ao projeto da Vercel
+.vercel/
+
+.vercel
+.env*
