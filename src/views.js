@@ -70,7 +70,7 @@ const ICONES = {
 const icone = (chave) => h`<svg class="icone" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${raw(ICONES[chave])}</svg>`;
 
 function pagina(user, titulo, corpo, ativo = '') {
-  const link = (href, texto, chave) => h`<a href="${href}" class="${ativo === chave ? 'ativo' : ''}">${icone(chave)}<span>${texto}</span></a>`;
+  const link = (href, texto, chave) => h`<a href="${href}" title="${texto}" class="${ativo === chave ? 'ativo' : ''}">${icone(chave)}<span>${texto}</span></a>`;
   const nav = !user
     ? ''
     : user.role === 'auditor'
@@ -87,11 +87,11 @@ function pagina(user, titulo, corpo, ativo = '') {
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="/style.css?v=${VERSAO}">
 </head>
-<body class="${user ? 'com-menu' : ''}">
+<body class="${user ? 'com-menu' : ''}${user?.menuRecolhido ? ' menu-recolhido' : ''}">
 <header class="topo">
   <a class="marca" href="/" aria-label="Umbral · Auditoria de caixas"><img src="/umbral-logo-white.png" alt="Umbral" width="205" height="40"><span>Auditoria de caixas</span></a>
   ${user && h`<p class="marca-sub"><b>CAIXAS</b><span>Auditoria de fechos</span></p>
-  <p class="nav-rotulo">Espaço de trabalho</p>`}
+  <p class="nav-rotulo"><span>Espaço de trabalho</span><button type="button" class="recolher" aria-label="Minimizar o menu" title="Minimizar o menu" aria-expanded="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button></p>`}
   ${user && h`<button type="button" class="hamburguer" aria-label="Abrir o menu" aria-expanded="false" aria-controls="menu-principal"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path class="h-barras" d="M4 6h16M4 12h16M4 18h16"/><path class="h-x" d="M6 6l12 12M18 6L6 18"/></svg></button>`}
   <nav id="menu-principal">${nav}</nav>
   ${user && h`<div class="conta"><span class="marca-conta">${user.nome.trim().charAt(0).toUpperCase()}</span><div class="conta-texto"><a href="/conta">${user.nome}</a><small>${papel}</small></div><form method="post" action="/logout"><button class="link" title="Terminar sessão">Sair</button></form></div>`}

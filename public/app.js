@@ -499,3 +499,22 @@ if (botaoMenu) {
   // Ao passar a um ecrã largo (ou rodar o telemóvel) o menu volta a ser a barra lateral fixa.
   larguraMovel.addEventListener('change', (e) => { if (!e.matches) definir(false); });
 }
+
+// ----- Menu lateral: minimizar / fixar (ecrãs largos) -----
+// A preferência fica num cookie, para o servidor já desenhar o menu no estado certo (sem "saltos" ao mudar de página).
+const botaoRecolher = document.querySelector('.recolher');
+if (botaoRecolher) {
+  const aplicar = (recolhido) => {
+    document.body.classList.toggle('menu-recolhido', recolhido);
+    const texto = recolhido ? 'Expandir o menu' : 'Minimizar o menu';
+    botaoRecolher.setAttribute('aria-expanded', String(!recolhido));
+    botaoRecolher.setAttribute('aria-label', texto);
+    botaoRecolher.title = texto;
+  };
+  aplicar(document.body.classList.contains('menu-recolhido'));
+  botaoRecolher.addEventListener('click', () => {
+    const recolhido = !document.body.classList.contains('menu-recolhido');
+    aplicar(recolhido);
+    document.cookie = `menu=${recolhido ? 'min' : 'max'}; path=/; max-age=31536000; samesite=lax${location.protocol === 'https:' ? '; secure' : ''}`;
+  });
+}

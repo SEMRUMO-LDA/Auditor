@@ -484,3 +484,30 @@ table.meios td .valida { justify-content: flex-start; }
 .nota-lida { margin: 0 0 1rem; padding: 0.7rem 0.9rem; background: var(--info-fundo); border-left: 3px solid var(--turquesa); border-radius: 8px; }
 .nota-lida p { margin: 0.25rem 0 0; white-space: pre-wrap; }
 td.nota-celula { max-width: 260px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--suave); font-size: 0.85rem; }
+
+/* Menu lateral minimizável (só em ecrãs largos): minimizado fica só com os ícones; a preferência fica num cookie. */
+.recolher { display: none; }
+td.nota-celula { min-width: 180px; }
+@media (min-width: 901px) {
+  body.com-menu { transition: padding-left 0.2s ease; }
+  body.com-menu .topo { transition: width 0.2s ease; }
+  .nav-rotulo { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding-right: 1.05rem; }
+  .recolher { display: inline-flex; flex: 0 0 auto; width: 30px; min-height: 30px; padding: 0; border: 1px solid var(--marinho-linha); border-radius: 8px; background: transparent; color: #f9f9f9; }
+  .recolher:hover { background: #343b88; }
+  .recolher:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  .recolher svg { transition: transform 0.2s ease; }
+
+  body.menu-recolhido { --menu-largura: 80px; }
+  body.menu-recolhido .marca { align-items: center; padding: 1.8rem 0; }
+  body.menu-recolhido .marca img { width: 34px; height: 40px; object-fit: cover; object-position: left center; }
+  body.menu-recolhido .marca-sub { display: none; }
+  body.menu-recolhido .nav-rotulo { justify-content: center; padding: 1rem 0 0.6rem; }
+  body.menu-recolhido .nav-rotulo span { display: none; }
+  body.menu-recolhido .recolher svg { transform: rotate(180deg); }
+  body.menu-recolhido .topo nav { padding: 0 0.6rem 1rem; }
+  body.menu-recolhido .topo nav a { justify-content: center; padding: 0.6rem 0; }
+  body.menu-recolhido .topo nav a span, body.menu-recolhido .topo nav a.ativo::after { display: none; }
+  body.menu-recolhido .conta { flex-direction: column; gap: 0.4rem; margin: 0 0.5rem; padding: 1rem 0; text-align: center; }
+  body.menu-recolhido .conta-texto { display: none; }
+  body.menu-recolhido .conta button.link { font-size: 0.7rem; padding: 0.25rem 0.4rem; }
+}

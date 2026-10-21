@@ -58,7 +58,10 @@ export async function carregarUtilizador(req, res, next) {
       hashToken(token),
       agora(),
     );
-    if (u) req.user = u;
+    if (u) {
+      u.menuRecolhido = lerCookie(req, 'menu') === 'min'; // preferência do menu lateral (minimizado/fixo)
+      req.user = u;
+    }
   }
   next();
 }
