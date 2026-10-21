@@ -69,7 +69,9 @@ export const FORNECEDORES = {
 };
 const CFG_ATIVO = 'leitura_fornecedor';
 const CFG_MODELO_GEMINI = 'gemini_modelo';
-export const MODELO_GEMINI_OMISSAO = 'gemini-3.8-flash';
+// O gemini-3.8-flash chegou a ficar sem responder (503/timeout) em testes reais; o 3.6 respondeu bem.
+export const MODELO_GEMINI_OMISSAO = 'gemini-3.6-flash';
+const MODELOS_GEMINI_ALTERNATIVOS = ['gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'];
 const API_GEMINI = 'https://generativelanguage.googleapis.com/v1beta';
 
 const fornecedorValido = (f) => {
@@ -211,37 +213,59 @@ const FORMATO_JSON = `
 Responde apenas com JSON, sem texto à volta, neste formato (um objeto por talão; usa null quando não souberes):
 {"taloes":[{"tipo":"compra"|"fecho"|"outro","tpa":string|null,"data":string|null,"hora":string|null,"valor":number|null,"cartao":string|null,"ultimos4":string|null,"num_compras":number|null,"id_reserva":string|null,"id_reserva_duvidoso":boolean,"legivel":boolean}]}`;
 
-async function lerComGemini(bytes, mime) {
-  const chave = await chaveDe('gemini');
-  if (!chave) throw new ErroLeitura(NAO_CONFIGURADA);
-  const modelo = await config(CFG_MODELO_GEMINI, MODELO_GEMINI_OMISSAO);
+// Um modelo do Gemini pode estar sobrecarregado ou indisponível (503, timeout, 429, 404). Em vez de falhar logo, tenta-se
+// o modelo escolhido e depois os alternativos, com um prazo curto por tentativa e um prazo total abaixo do limite da
+// função (60 s na Vercel).
+const PRAZO_TENTATIVA_MS = 22_000;
+const PRAZO_TOTAL_MS = 52_000;
+
+async function tentarGemini(chave, modelo, corpo, prazoMs) {
   let r;
   try {
     r = await fetch(`${API_GEMINI}/models/${encodeURIComponent(modelo)}:generateContent`, {
       method: 'POST',
       headers: { 'x-goog-api-key': chave, 'content-type': 'application/json' },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: INSTRUCOES + FORMATO_JSON }] },
-        contents: [{ role: 'user', parts: [{ inlineData: { mimeType: mime, data: bytes.toString('base64') } }, { text: 'Extrai os talões deste ficheiro.' }] }],
-        generationConfig: { responseMimeType: 'application/json', temperature: 0, maxOutputTokens: 8192 },
-      }),
-      signal: AbortSignal.timeout(90_000),
+      body: corpo,
+      signal: AbortSignal.timeout(prazoMs),
     });
-  } catch {
-    throw new ErroLeitura('Não foi possível contactar o serviço de leitura (Google Gemini). Tente de novo.');
+  } catch (erro) {
+    const demorou = erro?.name === 'TimeoutError' || erro?.name === 'AbortError';
+    return { transitorio: new ErroLeitura(demorou ? `O modelo "${modelo}" demorou demasiado a responder.` : 'Não foi possível contactar o serviço de leitura (Google Gemini). Tente de novo.') };
   }
   if ([401, 403].includes(r.status) || (r.status === 400 && /API_KEY_INVALID|API key not valid/i.test(await r.clone().text()))) {
     throw new ErroLeitura('A chave da API não é válida. O administrador pode atualizá-la em Configuração › Leitura de talões.');
   }
-  if (r.status === 429) throw new ErroLeitura('Foi atingido o limite de uso do serviço de leitura (Google Gemini). Tente daqui a pouco.');
-  if (r.status === 404) throw new ErroLeitura(`O modelo "${modelo}" não está disponível. O administrador pode mudá-lo em Configuração › Leitura de talões.`);
+  if (r.status === 429) return { transitorio: new ErroLeitura('Foi atingido o limite de uso do serviço de leitura (Google Gemini). Tente daqui a pouco.') };
+  if (r.status === 404) return { transitorio: new ErroLeitura(`O modelo "${modelo}" não está disponível. O administrador pode mudá-lo em Configuração › Leitura de talões.`) };
+  if (r.status >= 500) return { transitorio: new ErroLeitura(`O serviço de leitura (Google Gemini) está temporariamente indisponível ou sobrecarregado (erro ${r.status}). Tente de novo dentro de momentos.`) };
   if (!r.ok) throw new ErroLeitura(`O serviço de leitura devolveu um erro (${r.status}).`);
 
   const j = await r.json().catch(() => ({}));
   if (j.promptFeedback?.blockReason) throw new ErroLeitura('O serviço de leitura recusou este ficheiro.');
   const candidato = j.candidates?.[0];
   if (candidato?.finishReason === 'MAX_TOKENS') throw new ErroLeitura('A leitura ficou incompleta.');
-  return (candidato?.content?.parts ?? []).map((p) => p.text ?? '').join('');
+  return { texto: (candidato?.content?.parts ?? []).map((p) => p.text ?? '').join('') };
+}
+
+async function lerComGemini(bytes, mime) {
+  const chave = await chaveDe('gemini');
+  if (!chave) throw new ErroLeitura(NAO_CONFIGURADA);
+  const escolhido = await config(CFG_MODELO_GEMINI, MODELO_GEMINI_OMISSAO);
+  const corpo = JSON.stringify({
+    systemInstruction: { parts: [{ text: INSTRUCOES + FORMATO_JSON }] },
+    contents: [{ role: 'user', parts: [{ inlineData: { mimeType: mime, data: bytes.toString('base64') } }, { text: 'Extrai os talões deste ficheiro.' }] }],
+    generationConfig: { responseMimeType: 'application/json', temperature: 0, maxOutputTokens: 8192 },
+  });
+  const inicio = Date.now();
+  let ultimo;
+  for (const modelo of [escolhido, ...MODELOS_GEMINI_ALTERNATIVOS.filter((m) => m !== escolhido)]) {
+    const restante = PRAZO_TOTAL_MS - (Date.now() - inicio);
+    if (restante < 4_000) break;
+    const r = await tentarGemini(chave, modelo, corpo, Math.min(PRAZO_TENTATIVA_MS, restante));
+    if (!r.transitorio) return r.texto;
+    ultimo ??= r.transitorio; // a primeira falha é a do modelo que o administrador escolheu
+  }
+  throw ultimo ?? new ErroLeitura('Não foi possível usar o serviço de leitura automática.');
 }
 
 // O ficheiro chega como Buffer (o conteúdo vem da base de dados ou do pedido), já não como caminho em disco.

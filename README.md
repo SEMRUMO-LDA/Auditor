@@ -84,7 +84,7 @@ A app é interna e está escondida dos motores de pesquisa: todas as respostas l
 
 O auditor escolhe o serviço e adiciona a chave da API na própria app, em **Configuração › Leitura de talões**. Há dois fornecedores:
 
-- **Google Gemini** (modelo por omissão `gemini-3.8-flash`, mudável na mesma página): chave do Google AI Studio (aistudio.google.com/apikey). Tem nível gratuito, mas **no nível gratuito a Google pode usar o conteúdo enviado para melhorar os seus produtos**; como os talões incluem dados de clientes, ative a faturação (nível pago) se não quiser isso.
+- **Google Gemini** (modelo por omissão `gemini-3.6-flash`, mudável na mesma página; se um modelo falhar, a app tenta automaticamente outros): chave do Google AI Studio (aistudio.google.com/apikey). Tem nível gratuito, mas **no nível gratuito a Google pode usar o conteúdo enviado para melhorar os seus produtos**; como os talões incluem dados de clientes, ative a faturação (nível pago) se não quiser isso.
 - **Anthropic (Claude)**: chave em console.anthropic.com (a conta precisa de crédito). É o que dá melhor leitura da reserva escrita à mão.
 
 A chave é validada com o fornecedor antes de guardar, fica na base de dados (encriptada, se houver `ENCRYPTION_KEY`) e passa a valer logo, em Enviar talão, para todos os utilizadores. Nunca volta a ser mostrada (só os últimos 4 caracteres) e pode ser substituída ou removida. Com as duas chaves guardadas, escolhe-se qual está em uso.

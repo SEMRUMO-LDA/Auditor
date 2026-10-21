@@ -101,7 +101,8 @@ test('Gemini: erros do serviço viram mensagens claras para o utilizador', async
   await caso(() => resposta(400, { error: { message: 'API key not valid. Please pass a valid API key.' } }), /chave da API não é válida/);
   await caso(() => resposta(429, {}), /limite de uso/);
   await caso(() => resposta(404, {}), /não está disponível/);
-  await caso(() => resposta(500, {}), /erro \(500\)/);
+  await caso(() => resposta(500, {}), /indisponível ou sobrecarregado \(erro 500\)/);
+  await caso(() => resposta(418, {}), /erro \(418\)/);
   await caso(() => resposta(200, { promptFeedback: { blockReason: 'SAFETY' } }), /recusou/);
   await caso(() => resposta(200, { candidates: [{ finishReason: 'MAX_TOKENS', content: { parts: [{ text: '{' }] } }] }), /incompleta/);
   await caso(() => resposta(200, { candidates: [{ content: { parts: [{ text: 'isto não é JSON' }] } }] }), /não foi possível interpretar/);
@@ -120,4 +121,31 @@ test('escolher o fornecedor: só com chave, e remover o ativo passa para o outro
   assert.equal((await leitor.estadoLeitura()).ativo, 'anthropic', 'sem chave Gemini, volta ao Anthropic (variável de ambiente)');
   delete process.env.ANTHROPIC_API_KEY;
   assert.equal((await leitor.estadoLeitura()).ativo, null);
+});
+
+test('Gemini: se um modelo falha (503 ou demora demais), tenta o seguinte e a leitura corre bem', async () => {
+  const foto = Buffer.from([255, 216, 255, 224, 1]);
+  const bom = resposta(200, { candidates: [{ content: { parts: [{ text: JSON.stringify({ taloes: [TALAO] }) }] } }] });
+  await leitor.guardarChave(CHAVE_GEMINI, 'gemini');
+  await db.run("INSERT INTO config (chave, valor) VALUES ('gemini_modelo', 'modelo-avariado') ON CONFLICT (chave) DO UPDATE SET valor = excluded.valor");
+  const modelosTentados = () => pedidos.map((p) => p.url.match(/models\/([^:]+):/)[1]);
+
+  simular((url) => (url.includes('modelo-avariado') ? resposta(503, {}) : bom.clone()));
+  assert.equal((await leitor.lerTaloes(foto, 'image/jpeg')).length, 1);
+  assert.deepEqual(modelosTentados(), ['modelo-avariado', leitor.MODELO_GEMINI_OMISSAO]);
+
+  simular((url) => { if (url.includes('modelo-avariado')) { const e = new Error('demorou'); e.name = 'TimeoutError'; throw e; } return bom.clone(); });
+  assert.equal((await leitor.lerTaloes(foto, 'image/jpeg')).length, 1);
+  assert.equal(pedidos.length, 2);
+
+  // uma chave inválida não é motivo para tentar outros modelos
+  simular(() => resposta(403, {}));
+  await assert.rejects(() => leitor.lerTaloes(foto, 'image/jpeg'), /chave da API não é válida/);
+  assert.equal(pedidos.length, 1);
+
+  // tudo em baixo: tenta todos e devolve a mensagem do modelo escolhido
+  simular(() => resposta(503, {}));
+  await assert.rejects(() => leitor.lerTaloes(foto, 'image/jpeg'), /sobrecarregado/);
+  assert.equal(pedidos.length, 4);
+  await db.run("DELETE FROM config WHERE chave = 'gemini_modelo'");
 });

@@ -1075,7 +1075,7 @@ ${situacao}
 ${cartao('gemini', 'Google Gemini',
     h`Crie a chave em aistudio.google.com/apikey. <strong>Atenção:</strong> no nível gratuito a Google pode usar o conteúdo enviado para melhorar os seus produtos, e os talões incluem dados de clientes; para evitar isso, ative a faturação (nível pago) no Google AI Studio.${cifrada ? '' : ' Sem ENCRYPTION_KEY no servidor, a chave fica guardada sem encriptar.'}`,
     (e) => h`<label>Modelo <span class="suave">(opcional)</span>
-      <input name="modelo" value="${e.modelo}" placeholder="gemini-3.8-flash" autocomplete="off" spellcheck="false">
+      <input name="modelo" value="${e.modelo}" placeholder="gemini-3.6-flash" autocomplete="off" spellcheck="false">
     </label>`)}
 ${cartao('anthropic', 'Anthropic (Claude)',
     h`Crie a chave em console.anthropic.com › Settings › API Keys (a conta precisa de crédito). A chave não volta a ser mostrada: só os últimos 4 caracteres.${cifrada ? '' : ' Sem ENCRYPTION_KEY no servidor, a chave fica guardada sem encriptar.'}`)}`, 'config');
