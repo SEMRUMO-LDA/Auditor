@@ -571,10 +571,10 @@ ${caixaCorreta ? h`<p class="aviso ok caixa-correta">O total do diário, o total
 ${reservas.some((r) => r.reservas) && h`<section class="painel-aba" id="painel-reservas" role="tabpanel" aria-labelledby="aba-reservas" data-painel="reservas">
   <p class="suave">Total das reservas contra o que está faturado.</p>
   <div class="tabela-wrap"><table class="saidas">
-  <thead><tr><th></th><th class="num">Reservas</th><th class="num">Canceladas / no-show</th><th class="num">Total das reservas</th><th class="num">Faturado</th><th class="num">Por faturar</th><th class="num">Sem nenhuma fatura</th></tr></thead>
+  <thead><tr><th></th><th class="num">Reservas</th><th class="num">Canceladas / no-show</th><th class="num">Total das reservas</th><th class="num">Faturado</th><th class="num" title="Reservas com fatura FA: operadores, em conta corrente a 30 dias">Faturas FA (operadores)</th><th class="num">Por faturar</th><th class="num">Sem nenhuma fatura</th></tr></thead>
   <tbody>${reservas.filter((r) => r.reservas).map((r) => h`<tr>
     <td><strong>${r.nome}s</strong></td><td class="num">${r.ativas}</td><td class="num">${r.canceladas}</td>
-    <td class="num">${euros(r.total)}</td><td class="num">${euros(r.faturado)}</td><td class="num">${euros(r.total - r.faturado)}</td><td class="num">${r.semFatura}</td></tr>`)}</tbody>
+    <td class="num">${euros(r.total)}</td><td class="num">${euros(r.faturado)}</td><td class="num">${r.fa ? h`${r.fa} · ${euros(r.faValor)}` : traco}</td><td class="num">${euros(r.total - r.faturado - r.faValor)}</td><td class="num">${r.semFatura}</td></tr>`)}</tbody>
   </table></div>
 </section>`}
 

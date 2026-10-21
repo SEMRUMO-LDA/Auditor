@@ -124,6 +124,9 @@ export async function resumoReservas(data) {
       total: ativas.reduce((s, r) => s + r.total, 0) / 100,
       faturado: ativas.reduce((s, r) => s + r.faturado, 0) / 100,
       semFatura: ativas.filter((r) => r.total > 0 && !r.faturas.length).length,
+      // Faturadas a operadores (FA): o valor ainda não pago que está em conta corrente
+      fa: ativas.filter((r) => r.temFA).length,
+      faValor: ativas.filter((r) => r.temFA).reduce((s, r) => s + Math.max(0, r.total - r.faturado), 0) / 100,
     };
   }));
 }
@@ -528,15 +531,14 @@ export async function reconciliar(data) {
         }
         continue;
       }
+      // Qualquer reserva com documento FA (operador, conta corrente) entra na lista dos FA, seja qual for a regra da agência.
+      if (r.temFA) comFA.push(r);
       if (r.regra === 'agencia') {
         if (r.total > 0 && !r.faturas.length) deAgencia.push(r);
         continue;
       }
       // Fatura FA (operador, conta corrente a 30 dias): a reserva está faturada, mesmo sem valor pago no relatório.
-      if (r.temFA && r.faturado < r.total) {
-        comFA.push(r);
-        continue;
-      }
+      if (r.temFA && r.faturado < r.total) continue;
       if (r.faturado < r.total) {
         if (r.regra === 'prazo' && exportado <= somarDias(r.checkout, prazo)) {
           aAguardar.push(r);
