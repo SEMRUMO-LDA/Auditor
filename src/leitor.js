@@ -218,6 +218,8 @@ Responde apenas com JSON, sem texto à volta, neste formato (um objeto por talã
 // função (60 s na Vercel).
 const PRAZO_TENTATIVA_MS = 22_000;
 const PRAZO_TOTAL_MS = 52_000;
+// Passado este tempo sem resposta, tenta-se também o modelo seguinte em paralelo (configurável nos testes).
+const ATRASO_COBERTURA_MS = Number(process.env.GEMINI_ATRASO_MS) || 6_000;
 
 async function tentarGemini(chave, modelo, corpo, prazoMs) {
   let r;
@@ -238,6 +240,8 @@ async function tentarGemini(chave, modelo, corpo, prazoMs) {
   if (r.status === 429) return { transitorio: new ErroLeitura('Foi atingido o limite de uso do serviço de leitura (Google Gemini). Tente daqui a pouco.') };
   if (r.status === 404) return { transitorio: new ErroLeitura(`O modelo "${modelo}" não está disponível. O administrador pode mudá-lo em Configuração › Leitura de talões.`) };
   if (r.status >= 500) return { transitorio: new ErroLeitura(`O serviço de leitura (Google Gemini) está temporariamente indisponível ou sobrecarregado (erro ${r.status}). Tente de novo dentro de momentos.`) };
+  // 400 por outro motivo (por exemplo, o modelo não aceita a configuração de "pensamento"): quem chama pode tentar sem ela.
+  if (r.status === 400) return { pedidoRecusado: new ErroLeitura('O serviço de leitura devolveu um erro (400).') };
   if (!r.ok) throw new ErroLeitura(`O serviço de leitura devolveu um erro (${r.status}).`);
 
   const j = await r.json().catch(() => ({}));
@@ -251,19 +255,53 @@ async function lerComGemini(bytes, mime) {
   const chave = await chaveDe('gemini');
   if (!chave) throw new ErroLeitura(NAO_CONFIGURADA);
   const escolhido = await config(CFG_MODELO_GEMINI, MODELO_GEMINI_OMISSAO);
-  const corpo = JSON.stringify({
+  // "Pensamento" baixo: ler um talão não precisa de raciocínio longo, e assim a resposta chega em segundos (em testes
+  // reais, ~4 s em vez de ~15 s, com o mesmo resultado).
+  const montar = (pensar) => JSON.stringify({
     systemInstruction: { parts: [{ text: INSTRUCOES + FORMATO_JSON }] },
     contents: [{ role: 'user', parts: [{ inlineData: { mimeType: mime, data: bytes.toString('base64') } }, { text: 'Extrai os talões deste ficheiro.' }] }],
-    generationConfig: { responseMimeType: 'application/json', temperature: 0, maxOutputTokens: 8192 },
+    generationConfig: { responseMimeType: 'application/json', temperature: 0, maxOutputTokens: 8192, ...(pensar && { thinkingConfig: { thinkingLevel: 'low' } }) },
   });
+  const corpo = montar(true);
+  const corpoSemPensamento = montar(false);
   const inicio = Date.now();
+  const modelos = [escolhido, ...MODELOS_GEMINI_ALTERNATIVOS.filter((m) => m !== escolhido)];
+  const prazoRestante = () => Math.min(PRAZO_TENTATIVA_MS, PRAZO_TOTAL_MS - (Date.now() - inicio));
+  // Uma tentativa num modelo (e, se o modelo não aceitar o "pensamento", repete-a sem ele).
+  const tentarModelo = async (modelo) => {
+    let r = await tentarGemini(chave, modelo, corpo, Math.max(4_000, prazoRestante()));
+    if (r.pedidoRecusado) r = await tentarGemini(chave, modelo, corpoSemPensamento, Math.max(4_000, prazoRestante()));
+    return r;
+  };
+
+  // Em horas de muita procura o Google demora vários segundos só para responder 503. Por isso, se o modelo não
+  // respondeu passado um tempo, lança-se já o seguinte em paralelo; vale a primeira resposta boa.
   let ultimo;
-  for (const modelo of [escolhido, ...MODELOS_GEMINI_ALTERNATIVOS.filter((m) => m !== escolhido)]) {
-    const restante = PRAZO_TOTAL_MS - (Date.now() - inicio);
-    if (restante < 4_000) break;
-    const r = await tentarGemini(chave, modelo, corpo, Math.min(PRAZO_TENTATIVA_MS, restante));
-    if (!r.transitorio) return r.texto;
-    ultimo ??= r.transitorio; // a primeira falha é a do modelo que o administrador escolheu
+  let proximo = 0;
+  const emCurso = new Set();
+  const lancar = () => {
+    const entrada = {};
+    entrada.promessa = tentarModelo(modelos[proximo++]).then((r) => ({ entrada, r }), (fatal) => ({ entrada, fatal }));
+    emCurso.add(entrada);
+  };
+  lancar();
+  while (emCurso.size) {
+    let relogio;
+    const espera = proximo < modelos.length && prazoRestante() > 4_000
+      ? new Promise((ok) => { relogio = setTimeout(() => ok({ passouTempo: true }), ATRASO_COBERTURA_MS); })
+      : null;
+    const venceu = await Promise.race([...[...emCurso].map((e) => e.promessa), ...(espera ? [espera] : [])]);
+    clearTimeout(relogio);
+    if (venceu.passouTempo) {
+      lancar();
+      continue;
+    }
+    emCurso.delete(venceu.entrada);
+    if (venceu.fatal) throw venceu.fatal; // chave inválida, ficheiro recusado...
+    if (venceu.r.pedidoRecusado) throw venceu.r.pedidoRecusado;
+    if (!venceu.r.transitorio) return venceu.r.texto;
+    ultimo ??= venceu.r.transitorio; // a primeira falha é a do modelo que o administrador escolheu
+    if (!emCurso.size && proximo < modelos.length && prazoRestante() > 4_000) lancar();
   }
   throw ultimo ?? new ErroLeitura('Não foi possível usar o serviço de leitura automática.');
 }

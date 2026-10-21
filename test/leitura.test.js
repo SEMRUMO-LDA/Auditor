@@ -8,6 +8,7 @@ import path from 'node:path';
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'auditoria-leitura-'));
 process.env.PGLITE_MEMORIA = '1';
 process.env.ENCRYPTION_KEY = 'd'.repeat(64);
+process.env.GEMINI_ATRASO_MS = '120'; // nos testes, o 2.º modelo arranca ao fim de 0,12 s
 delete process.env.DATABASE_URL;
 delete process.env.ANTHROPIC_API_KEY;
 delete process.env.ANTHROPIC_AUTH_TOKEN;
@@ -91,6 +92,7 @@ test('Gemini: lê um talão (pedido bem formado, resposta normalizada, mesmo den
   assert.equal(corpo.contents[0].parts[0].inlineData.mimeType, 'image/jpeg');
   assert.deepEqual(Buffer.from(corpo.contents[0].parts[0].inlineData.data, 'base64'), foto);
   assert.equal(corpo.generationConfig.responseMimeType, 'application/json');
+  assert.equal(corpo.generationConfig.thinkingConfig.thinkingLevel, 'low', 'pensamento baixo: leitura mais rápida');
   assert.match(corpo.systemInstruction.parts[0].text, /id_reserva/);
 });
 
@@ -147,5 +149,37 @@ test('Gemini: se um modelo falha (503 ou demora demais), tenta o seguinte e a le
   simular(() => resposta(503, {}));
   await assert.rejects(() => leitor.lerTaloes(foto, 'image/jpeg'), /sobrecarregado/);
   assert.equal(pedidos.length, 4);
+  await db.run("DELETE FROM config WHERE chave = 'gemini_modelo'");
+});
+
+test('Gemini: se o modelo não aceita o "pensamento" (400), repete o pedido sem ele', async () => {
+  const foto = Buffer.from([255, 216, 255, 224, 9]);
+  const bom = { candidates: [{ content: { parts: [{ text: JSON.stringify({ taloes: [TALAO] }) }] } }] };
+  await leitor.guardarChave(CHAVE_GEMINI, 'gemini');
+  simular((url, o) => (JSON.parse(o.body).generationConfig.thinkingConfig ? resposta(400, { error: { message: 'thinking not supported' } }) : resposta(200, bom)));
+  assert.equal((await leitor.lerTaloes(foto, 'image/jpeg')).length, 1);
+  assert.equal(pedidos.length, 2);
+  assert.equal(JSON.parse(pedidos[1].opcoes.body).generationConfig.thinkingConfig, undefined);
+  // um 400 que não resolve sem o pensamento é um erro de verdade
+  simular(() => resposta(400, { error: { message: 'pedido inválido' } }));
+  await assert.rejects(() => leitor.lerTaloes(foto, 'image/jpeg'), /erro \(400\)/);
+  assert.equal(pedidos.length, 2);
+});
+
+test('Gemini: se o modelo escolhido demora a responder, o seguinte arranca em paralelo e ganha a primeira resposta boa', async () => {
+  const foto = Buffer.from([255, 216, 255, 224, 5]);
+  const bom = { candidates: [{ content: { parts: [{ text: JSON.stringify({ taloes: [TALAO] }) }] } }] };
+  await leitor.guardarChave(CHAVE_GEMINI, 'gemini');
+  await db.run("INSERT INTO config (chave, valor) VALUES ('gemini_modelo', 'modelo-lento') ON CONFLICT (chave) DO UPDATE SET valor = excluded.valor");
+  const parar = (ms) => new Promise((ok) => setTimeout(ok, ms));
+  simular(async (url) => {
+    if (url.includes('modelo-lento')) { await parar(900); return resposta(503, {}); } // só falha ao fim de 0,9 s
+    await parar(60);
+    return resposta(200, bom);
+  });
+  const t0 = Date.now();
+  assert.equal((await leitor.lerTaloes(foto, 'image/jpeg')).length, 1);
+  assert.ok(Date.now() - t0 < 600, 'não esperou pela falha lenta (' + (Date.now() - t0) + ' ms)');
+  assert.equal(pedidos.length, 2, 'o modelo lento e o seguinte, em paralelo');
   await db.run("DELETE FROM config WHERE chave = 'gemini_modelo'");
 });
