@@ -12,6 +12,7 @@ import { importar } from './src/fechos.js';
 import { reconciliar, reconciliarTudo, resumoReservas, calcularReservas, PRAZO_OMISSAO, SEM_AGENCIA } from './src/reconcile.js';
 import { lerTaloes, ErroLeitura, MIMES_IMAGEM, estadoLeitura, validarChave, guardarChave, removerChave, definirAtivo } from './src/leitor.js';
 import { cifrarTexto, cifrarBytes, cifraAtiva } from './src/cifra.js';
+import { hashFicheiro, envioComFicheiro, taloesRepetidos, descreverRepetido } from './src/duplicados.js';
 import { DENOMINACOES, MAX_QUANTIDADE, MEIO_NUMERARIO, totalContado } from './src/numerario.js';
 import { analisarMeios } from './src/meios.js';
 import { lerExtrato, ErroExtrato, centimos } from './src/extratos.js';
@@ -691,10 +692,21 @@ app.post('/taloes/enviar', exigirLogin, (req, res, next) => {
       if (erroUpload) return res.status(400).send(v.novoTalaoPage(req.user, `O ficheiro é demasiado grande (máximo ${TEXTO_MAX}).`));
       const f = req.file;
       if (!f) return res.status(400).send(v.novoTalaoPage(req.user, 'Escolha uma fotografia (JPEG ou PNG) ou um PDF.'));
-      const id = await inserir('INSERT INTO envios (user_id, ficheiro, mime, nome_original, criado_em, nota) VALUES (?, ?, ?, ?, ?, ?)', req.user.id, crypto.randomBytes(16).toString('hex') + EXTENSAO[f.mimetype], f.mimetype, f.originalname, agora(), lerNota(req.body));
+      // O mesmo ficheiro não se envia duas vezes (poupa também a leitura automática).
+      const hash = hashFicheiro(f.buffer);
+      const anterior = await envioComFicheiro(hash);
+      if (anterior) return res.status(409).send(v.novoTalaoPage(req.user, `Este talão já foi enviado (a ${v.quandoPT(anterior.criado_em)}, envio #${anterior.id}). Não é preciso enviá-lo outra vez.`));
+      const id = await inserir('INSERT INTO envios (user_id, ficheiro, mime, nome_original, criado_em, nota, hash) VALUES (?, ?, ?, ?, ?, ?, ?)', req.user.id, crypto.randomBytes(16).toString('hex') + EXTENSAO[f.mimetype], f.mimetype, f.originalname, agora(), lerNota(req.body), hash);
       await run('INSERT INTO envio_ficheiros (envio_id, conteudo) VALUES (?, ?)', id, cifrarBytes(f.buffer));
       try {
         const lidos = await lerTaloes(f.buffer, f.mimetype);
+        // Se todos os talões lidos já existem (por exemplo, outra fotografia do mesmo papel), o envio é recusado.
+        const repetidos = await taloesRepetidos(lidos, id);
+        if (lidos.length && repetidos.every(Boolean)) {
+          await run('DELETE FROM envios WHERE id = ?', id);
+          const motivos = lidos.map((t, i) => descreverRepetido(t, repetidos[i], lidos.length > 1 ? i + 1 : 0));
+          return res.status(409).send(v.novoTalaoPage(req.user, `Este talão já foi enviado e não foi guardado outra vez. ${motivos.join(' ')}`));
+        }
         await tx(async () => {
           await run('UPDATE envios SET leitura_json = ? WHERE id = ?', JSON.stringify(lidos), id);
           for (const t of lidos) {
@@ -760,7 +772,13 @@ async function carregarEnvio(req, res, next) {
 const taloesDoEnvio = async (id) => await all('SELECT * FROM taloes WHERE envio_id = ? ORDER BY id', id);
 
 app.get('/envios/:id', exigirLogin, carregarEnvio, async (req, res) => {
-  res.send(v.envioPage(req.user, req.envio, await taloesDoEnvio(req.envio.id), req.editavel));
+  const taloes = await taloesDoEnvio(req.envio.id);
+  // Ao confirmar um envio novo, avisa se algum talão lido já existe noutro envio.
+  const avisos = [];
+  if (req.editavel && req.envio.estado === 'rascunho') {
+    (await taloesRepetidos(taloes, req.envio.id)).forEach((r, i) => { if (r) avisos.push(descreverRepetido(taloes[i], r, i + 1) + ' Se é o mesmo talão, remova-o ou apague este envio.'); });
+  }
+  res.send(v.envioPage(req.user, req.envio, taloes, req.editavel, avisos));
 });
 
 app.get('/envios/:id/ficheiro', exigirLogin, carregarEnvio, async (req, res, next) => {
@@ -819,6 +837,11 @@ app.post('/envios/:id', exigirLogin, carregarEnvio, async (req, res) => {
   if (!req.editavel) return res.status(403).send(v.erroPage(req.user, 'Envio já confirmado', 'Só o auditor pode alterar um talão depois de confirmado.'));
   const { taloes, erros } = lerFormularioTaloes(req.body);
   const nota = lerNota(req.body);
+  if (!erros.length) {
+    // Nem repetidos de outros envios, nem dois iguais na mesma fotografia.
+    const repetidos = await taloesRepetidos(taloes, envio.id);
+    repetidos.forEach((r, i) => { if (r) erros.push(descreverRepetido(taloes[i], r, i + 1) + ' Se é o mesmo talão, remova-o ou apague este envio.'); });
+  }
   if (erros.length) return res.status(400).send(v.envioPage(req.user, { ...envio, nota }, taloes, true, erros));
 
   const antes = await taloesDoEnvio(envio.id);
@@ -1023,7 +1046,7 @@ app.use((erro, req, res, next) => {
 
 // Arranque (só num servidor normal; numa função sem estado cada arranque a frio tem de ser o mais curto possível).
 if (!SEM_ESTADO) {
-  const { migrar, importarFicheirosLocais } = await import('./src/migracao.js');
+  const { migrar, importarFicheirosLocais, preencherHashes } = await import('./src/migracao.js');
   // Se a base de dados nova estiver vazia mas existir a antiga (SQLite), os dados não podem "desaparecer".
   const SQLITE_ANTIGO = path.join(DATA_DIR, 'caixas.db');
   if (fs.existsSync(SQLITE_ANTIGO) && (await get('SELECT COUNT(*) AS n FROM users')).n === 0) {
@@ -1039,6 +1062,7 @@ if (!SEM_ESTADO) {
   // Fotografias e PDF de talões de antes de passarem para a base de dados.
   const n = await importarFicheirosLocais();
   if (n) console.log(`  ${n} ficheiro(s) de talões da pasta data/taloes copiados para a base de dados.`);
+  await preencherHashes();
 }
 
 const porta = Number(process.env.PORT) || 3000;

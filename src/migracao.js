@@ -6,6 +6,7 @@ import path from 'node:path';
 import { all, get, run, tx, DATA_DIR, UPLOAD_DIR } from './db.js';
 import { TABELAS } from './esquema.js';
 import { cifrarColuna, cifrarBytes } from './cifra.js';
+import { hashFicheiro } from './duplicados.js';
 
 const LOTE = 400; // linhas por INSERT
 
@@ -89,4 +90,15 @@ export async function importarFicheirosLocais() {
     copiados++;
   }
   return copiados;
+}
+
+// Calcula a impressão digital dos ficheiros enviados antes de existir a deteção de talões repetidos.
+// Devolve quantos envios foram atualizados.
+export async function preencherHashes() {
+  const sem = await all('SELECT envio_id FROM envio_ficheiros f JOIN envios e ON e.id = f.envio_id WHERE e.hash IS NULL');
+  for (const { envio_id } of sem) {
+    const { conteudo } = await get('SELECT conteudo FROM envio_ficheiros WHERE envio_id = ?', envio_id); // já decifrado
+    await run('UPDATE envios SET hash = ? WHERE id = ?', hashFicheiro(Buffer.from(conteudo)), envio_id);
+  }
+  return sem.length;
 }

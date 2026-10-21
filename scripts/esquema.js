@@ -6,12 +6,14 @@
 import '../src/env.js';
 process.env.DATABASE_ESQUEMA = '0'; // o esquema é criado aqui, de forma explícita
 const { DESTINO, criarEsquema, fecharBaseDeDados } = await import('../src/db.js');
-const { importarFicheirosLocais } = await import('../src/migracao.js');
+const { importarFicheirosLocais, preencherHashes } = await import('../src/migracao.js');
 
 console.log(`Destino: ${DESTINO === 'postgres' ? 'Postgres (DATABASE_URL)' : 'Postgres local (data/pglite)'}`);
 try {
   await criarEsquema();
   console.log('Esquema criado/atualizado.');
+  const hashes = await preencherHashes();
+  if (hashes) console.log(`Impressões digitais calculadas para ${hashes} ficheiro(s) já enviados.`);
   if (process.argv.includes('--ficheiros')) console.log(`Ficheiros de talões copiados: ${await importarFicheirosLocais()}`);
 } catch (erro) {
   console.error(`Falhou: ${erro.message}`);

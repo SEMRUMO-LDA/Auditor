@@ -123,10 +123,13 @@ CREATE TABLE IF NOT EXISTS envios (
   estado ${T} NOT NULL DEFAULT 'rascunho' CHECK (estado IN ('rascunho', 'confirmado')),
   confirmado_em ${T}, confirmado_por INTEGER,
   leitura_json ${T}, leitura_erro ${T},
-  nota ${T}
+  nota ${T}, hash ${T}
 );
 -- Bases de dados criadas antes de existirem as notas dos utilizadores:
 ALTER TABLE envios ADD COLUMN IF NOT EXISTS nota ${T};
+-- Impressão digital (SHA-256) do ficheiro, para detetar o mesmo talão enviado duas vezes.
+ALTER TABLE envios ADD COLUMN IF NOT EXISTS hash ${T};
+CREATE INDEX IF NOT EXISTS envios_hash ON envios(hash);
 CREATE TABLE IF NOT EXISTS taloes (
   id ${ID},
   envio_id INTEGER NOT NULL REFERENCES envios(id) ON DELETE CASCADE,

@@ -64,6 +64,15 @@ Limites na Vercel: cada ficheiro carregado pode ter até 4 MB (limite de 4,5 MB 
 
 Quem envia um talão pode escrever uma nota para o auditor (até 500 caracteres) antes de o enviar, e pode editá-la ao confirmar. A nota aparece na confirmação do talão, em "Os meus envios", na lista de Talões, nos talões de cada fecho e nos detalhes das inconsistências ligadas a esse talão.
 
+## Talões repetidos
+
+Ao enviar um talão, a app recusa-o (com uma mensagem a explicar porquê) se:
+
+- **o ficheiro é o mesmo** que já foi enviado (impressão digital SHA-256); neste caso nem chega a ser lido, o que poupa a leitura automática;
+- **o talão lido já existe** noutro envio, mesmo que seja outra fotografia do mesmo papel: mesmo tipo, terminal, dia, hora e valor, e os mesmos últimos 4 dígitos do cartão quando existem. Dois clientes com o mesmo valor no mesmo minuto, mas cartões diferentes, não contam como repetidos.
+
+Ao confirmar um talão (ou ao preencher à mão), a mesma verificação impede guardar um talão que já existe noutro envio ou que está duplicado na mesma fotografia. Para os envios feitos antes desta verificação, `npm run esquema` calcula as impressões digitais em falta.
+
 ## Encriptação dos dados
 
 Em trânsito, a ligação ao Supabase e o site na Vercel usam TLS/HTTPS; em repouso, o Supabase e a Vercel encriptam os discos. Além disso, a app encripta com **AES-256-GCM**, antes de os gravar na base de dados, os dados mais sensíveis:

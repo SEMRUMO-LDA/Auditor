@@ -33,7 +33,7 @@ export const euros = (v) =>
   v === null || v === undefined ? '' : Number(v).toLocaleString('pt-PT', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
 export const dataPT = (iso) => (iso ? iso.split('-').reverse().join('/') : '');
 const diaSemana = (iso) => new Date(iso + 'T12:00:00Z').toLocaleDateString('pt-PT', { weekday: 'long', timeZone: 'UTC' });
-const quandoPT = (iso) =>
+export const quandoPT = (iso) =>
   iso ? new Date(iso).toLocaleString('pt-PT', { timeZone: 'Europe/Lisbon', dateStyle: 'short', timeStyle: 'short' }) : '';
 const valorCampo = (v) => (v === null || v === undefined ? '' : String(v).replace('.', ','));
 
