@@ -36,7 +36,12 @@ export const TIPOS = {
   CANCELADA_COM_FATURA: 'Reserva cancelada com fatura',
   RESERVAS_A_AGUARDAR: 'Reservas dentro do prazo de faturação',
   RESERVAS_AGENCIA: 'Reservas faturadas à agência',
+  RESERVAS_COM_FA: 'Reservas faturadas a operadores (FA)',
 };
+
+// Documentos FA: faturas dos operadores, em conta corrente (pagamento a 30 dias). Não têm pagamento no dia, por isso vêm
+// com valor 0,00 e sem meio de pagamento, e não se espera movimento de caixa.
+const eFA = (doc) => /^FA\b/i.test(doc || '');
 
 const cent = (v) => Math.round((v ?? 0) * 100);
 const soma = (arr) => arr.reduce((a, x) => a + cent(x.valor), 0);
@@ -102,7 +107,7 @@ export async function calcularReservas(data, lado) {
     const base = ativas[0] || ls[0];
     const agencia = base.agencia || SEM_AGENCIA;
     return {
-      reserva, linhas: ls, ativas, faturas: fs, total, faturado: soma(fs), pessoasNoites, agencia,
+      reserva, linhas: ls, ativas, faturas: fs, total, faturado: soma(fs), pessoasNoites, agencia, temFA: fs.some((f) => eFA(f.doc)),
       regra: regras.get(agencia) || 'agencia', hospede: base.hospede,
       checkout: ls.map((l) => l.checkout).filter(Boolean).sort().pop(),
     };
@@ -233,6 +238,7 @@ export async function reconciliar(data) {
       const ms = [...(movDoc.get(doc) || [])];
       const fs = [...(fatDoc.get(doc) || [])];
       const dono = (movDoc.get(doc) || [])[0];
+      if (eFA(doc) && !movDoc.has(doc)) continue; // fatura a operador (conta corrente): não há pagamento no dia
       for (let i = ms.length - 1; i >= 0; i--) {
         const j = fs.findIndex((f) => f.tipo === ms[i].tipo && cent(f.valor) === cent(ms[i].valor));
         if (j >= 0) {
@@ -505,6 +511,7 @@ export async function reconciliar(data) {
     const exportado = fecho[`${col}_faturas_em`].slice(0, 10);
     const aAguardar = [];
     const deAgencia = [];
+    const comFA = [];
     for (const r of await calcularReservas(data, lado)) {
       const quem = `${LADOS[lado]} · reserva ${r.reserva} (${r.hospede || 'sem nome'}, ${r.agencia})`;
       const comum = { valor: (r.faturado - r.total) / 100 };
@@ -523,6 +530,11 @@ export async function reconciliar(data) {
       }
       if (r.regra === 'agencia') {
         if (r.total > 0 && !r.faturas.length) deAgencia.push(r);
+        continue;
+      }
+      // Fatura FA (operador, conta corrente a 30 dias): a reserva está faturada, mesmo sem valor pago no relatório.
+      if (r.temFA && r.faturado < r.total) {
+        comFA.push(r);
         continue;
       }
       if (r.faturado < r.total) {
@@ -555,6 +567,16 @@ export async function reconciliar(data) {
     }
     const resumo = (rs) => rs.map((r) => ({ origem: 'Reservas', Reserva: r.reserva, Hóspede: r.hospede, Agência: r.agencia, 'Check-out': dataPT(r.checkout), Total: r.total / 100, Faturado: r.faturado / 100 }));
     const totalDe = (rs) => euros(rs.reduce((s, r) => s + r.total - r.faturado, 0));
+    if (comFA.length) {
+      add('RESERVAS_COM_FA', lado, {
+        gravidade: 'info',
+        titulo: `${LADOS[lado]}s: ${comFA.length} reserva(s) faturadas a operadores com documento FA (${euros(comFA.reduce((t, r) => t + r.total, 0))} em conta corrente)`,
+        detalhe: {
+          texto: 'Os documentos FA são faturas dos operadores, em conta corrente e com pagamento a 30 dias: não têm pagamento no dia, por isso a reserva conta como faturada e não é pedido movimento de caixa. Convém acompanhar o recebimento.',
+          registos: comFA.map((r) => ({ origem: 'Reservas', Reserva: r.reserva, Hóspede: r.hospede, Agência: r.agencia, 'Check-out': dataPT(r.checkout), Total: r.total / 100, 'Documento FA': r.faturas.filter((f) => eFA(f.doc)).map((f) => f.doc).join(', ') })),
+        },
+      });
+    }
     if (aAguardar.length) {
       add('RESERVAS_A_AGUARDAR', lado, {
         gravidade: 'info',
