@@ -199,7 +199,7 @@ export function carregarPage(user, erro) {
   <ul>
     <li>Diário de caixa (CSV)</li>
     <li>Relatório de faturas por data da fatura (CSV)</li>
-    <li>Lista de saídas e relatório de faturas por data de check-out</li>
+    <li>Lista de saídas e relatório de faturas por data de check-out (Invoices by Check-in, com ou sem a coluna da data da fatura)</li>
     <li>Lista de entradas e relatório de faturas por data de check-in</li>
   </ul>
   <p class="suave">Pode carregar só alguns e juntar os restantes mais tarde. Se o dia já existir, cada ficheiro substitui o anterior do mesmo tipo e as notas já escritas mantêm-se.</p>

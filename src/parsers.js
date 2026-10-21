@@ -130,7 +130,8 @@ export function parseDiario(buffer) {
 }
 
 // Lê todas as linhas do relatório "Invoices by Check-in", incluindo as de reservas ainda sem fatura
-// (que vêm com o documento vazio e a data 01/01/1900).
+// (que vêm com o documento vazio e a data 01/01/1900). A coluna da data da fatura (InvoiceDate) é opcional: há exportações
+// (por check-in ou check-out, sem data da fatura) que não a trazem; nesse caso a lista devolvida tem temData = false.
 function lerRelatorioFaturas(texto) {
   const linhas = parseCSV(texto);
   // Os nomes das colunas trazem um sufixo numérico que pode mudar ("resno6"), por isso ignora-se.
@@ -150,7 +151,7 @@ function lerRelatorioFaturas(texto) {
     tipo: col('bookingcode'),
     info: col('res_info'),
   };
-  if (idx.doc < 0 || idx.valor < 0 || idx.reserva < 0 || idx.data < 0) {
+  if (idx.doc < 0 || idx.valor < 0 || idx.reserva < 0) {
     throw new ErroFicheiro('Não reconheço este ficheiro como o relatório de faturas (faltam colunas esperadas).');
   }
   const campo = (linha, i) => (i < 0 ? '' : (linha[i] ?? '').trim());
@@ -159,7 +160,7 @@ function lerRelatorioFaturas(texto) {
     if (vazia(linha) || !campo(linha, idx.reserva)) continue;
     const doc = campo(linha, idx.doc);
     todas.push({
-      data: doc ? dataISO(campo(linha, idx.data)) : null,
+      data: doc && idx.data >= 0 ? dataISO(campo(linha, idx.data)) : null,
       hotel: campo(linha, idx.hotel),
       reserva: campo(linha, idx.reserva),
       quarto: campo(linha, idx.quarto),
@@ -173,12 +174,15 @@ function lerRelatorioFaturas(texto) {
       info: campo(linha, idx.info).replace(/\s+/g, ' ').trim(),
     });
   }
+  todas.temData = idx.data >= 0;
   return todas;
 }
 
 // Relatório de faturas exportado pela data da fatura: as faturas emitidas num dia.
 export function parseFaturas(buffer) {
-  const faturas = lerRelatorioFaturas(descodificar(buffer)).filter((f) => f.doc);
+  const todas = lerRelatorioFaturas(descodificar(buffer));
+  if (!todas.temData) throw new ErroFicheiro('Este relatório de faturas não tem a data da fatura (InvoiceDate), por isso não dá para saber de que dia é.');
+  const faturas = todas.filter((f) => f.doc);
   if (!faturas.length) throw new ErroFicheiro('O relatório de faturas não tem nenhuma linha.');
   return { data: dataUnica(faturas.map((f) => f.data), 'relatório de faturas'), faturas };
 }
@@ -195,7 +199,8 @@ function moda(linhas, campo) {
 function classificarRelatorio(todas) {
   if (!todas.length) throw new ErroFicheiro('O relatório de faturas não tem nenhuma linha.');
   const comFatura = todas.filter((f) => f.doc);
-  if (comFatura.length === todas.length && new Set(comFatura.map((f) => f.data)).size === 1) {
+  // Sem a coluna da data da fatura não pode ser o relatório "por data da fatura".
+  if (todas.temData && comFatura.length === todas.length && new Set(comFatura.map((f) => f.data)).size === 1) {
     return { tipo: 'faturas', data: comFatura[0].data, faturas: comFatura };
   }
   const [diaSaida, nSaida] = moda(todas, 'checkout');
