@@ -477,3 +477,10 @@ table.meios td .valida { justify-content: flex-start; }
 .valida.auto { cursor: default; }
 .valida.auto input { cursor: default; }
 .auto-tag { margin-left: 0.4rem; padding: 0.05rem 0.4rem; border-radius: 999px; background: var(--ok-fundo); color: var(--ok); font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+
+/* Notas dos utilizadores nos talões */
+.nota-envio { display: block; margin: 1rem 0; }
+.nota-envio textarea { min-height: 84px; }
+.nota-lida { margin: 0 0 1rem; padding: 0.7rem 0.9rem; background: var(--info-fundo); border-left: 3px solid var(--turquesa); border-radius: 8px; }
+.nota-lida p { margin: 0.25rem 0 0; white-space: pre-wrap; }
+td.nota-celula { max-width: 260px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--suave); font-size: 0.85rem; }

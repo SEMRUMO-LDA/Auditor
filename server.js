@@ -250,7 +250,7 @@ async function opcoesFiltro(data) {
 }
 
 const SQL_TALOES = `
-  SELECT t.*, e.estado, u.nome AS enviado_por FROM taloes t
+  SELECT t.*, e.estado, e.nota AS nota_envio, u.nome AS enviado_por FROM taloes t
   JOIN envios e ON e.id = t.envio_id JOIN users u ON u.id = e.user_id`;
 
 // Terminais (TPA) com as caixas a que pertencem, em duas consultas (não uma por terminal).
@@ -266,7 +266,7 @@ app.get('/fechos/:data', exigirAuditor, async (req, res, next) => {
   const fecho = RE_DATA.test(data) && await get('SELECT * FROM fechos WHERE data = ?', data);
   if (!fecho) return next();
   // As consultas independentes correm em paralelo: com a base de dados no Supabase cada uma custa uma viagem pela rede.
-  const SQL_TALOES_DIA = `SELECT t.id, t.envio_id, t.valor, t.doc_associado, t.hora, t.tpa, t.cartao, t.ultimos4, t.reservas
+  const SQL_TALOES_DIA = `SELECT t.id, t.envio_id, t.valor, t.doc_associado, t.hora, t.tpa, t.cartao, t.ultimos4, t.reservas, e.nota AS nota_envio
     FROM taloes t JOIN envios e ON e.id = t.envio_id WHERE t.data = ? AND t.tipo = ? ORDER BY t.hora, t.id`;
   const [
     totais, meios, porUtilizador, valoresPorUtilizador, contagemLinhas, alojamentos, alojamentosPendentes, quantidadesLinhas, esperadoNumerario,
@@ -673,6 +673,9 @@ app.post('/extratos/desassociar', exigirAuditor, async (req, res) => {
 
 // ---------- Talões ----------
 const EXTENSAO = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif', 'application/pdf': '.pdf' };
+// Nota opcional do utilizador sobre o talão (até 500 caracteres).
+const lerNota = (body) => String(body?.nota ?? '').trim().slice(0, 500) || null;
+
 // O ficheiro fica em memória e daí vai para a base de dados (sem disco). Na Vercel os pedidos aceitam até 4,5 MB.
 const fotos = multer({
   storage: multer.memoryStorage(),
@@ -688,7 +691,7 @@ app.post('/taloes/enviar', exigirLogin, (req, res, next) => {
       if (erroUpload) return res.status(400).send(v.novoTalaoPage(req.user, `O ficheiro é demasiado grande (máximo ${TEXTO_MAX}).`));
       const f = req.file;
       if (!f) return res.status(400).send(v.novoTalaoPage(req.user, 'Escolha uma fotografia (JPEG ou PNG) ou um PDF.'));
-      const id = await inserir('INSERT INTO envios (user_id, ficheiro, mime, nome_original, criado_em) VALUES (?, ?, ?, ?, ?)', req.user.id, crypto.randomBytes(16).toString('hex') + EXTENSAO[f.mimetype], f.mimetype, f.originalname, agora());
+      const id = await inserir('INSERT INTO envios (user_id, ficheiro, mime, nome_original, criado_em, nota) VALUES (?, ?, ?, ?, ?, ?)', req.user.id, crypto.randomBytes(16).toString('hex') + EXTENSAO[f.mimetype], f.mimetype, f.originalname, agora(), lerNota(req.body));
       await run('INSERT INTO envio_ficheiros (envio_id, conteudo) VALUES (?, ?)', id, cifrarBytes(f.buffer));
       try {
         const lidos = await lerTaloes(f.buffer, f.mimetype);
@@ -717,7 +720,7 @@ app.post('/taloes/enviar', exigirLogin, (req, res, next) => {
 
 app.get('/taloes/meus', exigirLogin, async (req, res) => {
   const envios = await all(
-    `SELECT e.id, e.criado_em, e.estado, COUNT(t.id) AS n, SUM(CASE WHEN t.tipo = 'compra' THEN t.valor END) AS total,
+    `SELECT e.id, e.criado_em, e.estado, e.nota, COUNT(t.id) AS n, SUM(CASE WHEN t.tipo = 'compra' THEN t.valor END) AS total,
       REPLACE(STRING_AGG(DISTINCT NULLIF(t.reservas, ''), ',' ORDER BY NULLIF(t.reservas, '')), ',', ', ') AS reservas
      FROM envios e LEFT JOIN taloes t ON t.envio_id = e.id WHERE e.user_id = ? GROUP BY e.id ORDER BY e.id DESC LIMIT 200`,
     req.user.id,
@@ -815,7 +818,8 @@ app.post('/envios/:id', exigirLogin, carregarEnvio, async (req, res) => {
   const envio = req.envio;
   if (!req.editavel) return res.status(403).send(v.erroPage(req.user, 'Envio já confirmado', 'Só o auditor pode alterar um talão depois de confirmado.'));
   const { taloes, erros } = lerFormularioTaloes(req.body);
-  if (erros.length) return res.status(400).send(v.envioPage(req.user, envio, taloes, true, erros));
+  const nota = lerNota(req.body);
+  if (erros.length) return res.status(400).send(v.envioPage(req.user, { ...envio, nota }, taloes, true, erros));
 
   const antes = await taloesDoEnvio(envio.id);
   const mantidos = new Set();
@@ -838,6 +842,7 @@ app.post('/envios/:id', exigirLogin, carregarEnvio, async (req, res) => {
       await run('INSERT INTO tpas (numero) VALUES (?) ON CONFLICT DO NOTHING', t.tpa);
     }
     for (const a of antes) if (!mantidos.has(a.id)) await run('DELETE FROM taloes WHERE id = ?', a.id);
+    await run('UPDATE envios SET nota = ? WHERE id = ?', nota, envio.id);
     if (envio.estado === 'rascunho') {
       await run(`UPDATE envios SET estado = 'confirmado', confirmado_em = ?, confirmado_por = ? WHERE id = ?`, agora(), req.user.id, envio.id);
     }

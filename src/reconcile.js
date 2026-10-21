@@ -126,6 +126,7 @@ export async function resumoReservas(data) {
 const regTalao = (t) => ({
   origem: 'Talão', Tipo: t.tipo === 'fecho' ? 'Fecho do terminal' : 'Compra', TPA: t.tpa, Hora: t.hora, Valor: t.valor,
   Cartão: [t.cartao, t.ultimos4 && `****${t.ultimos4}`].filter(Boolean).join(' '), Reserva: t.reservas, 'Enviado por': t.enviado_por,
+  ...(t.nota_envio ? { Nota: t.nota_envio } : {}),
 });
 
 export async function reconciliar(data) {
@@ -135,7 +136,7 @@ export async function reconciliar(data) {
   const mov = await all('SELECT * FROM movimentos WHERE data = ? ORDER BY hora, id', data);
   const fat = await all('SELECT * FROM faturas WHERE data = ? ORDER BY id', data);
   const taloes = await all(
-    `SELECT t.*, u.nome AS enviado_por FROM taloes t JOIN envios e ON e.id = t.envio_id JOIN users u ON u.id = e.user_id
+    `SELECT t.*, e.nota AS nota_envio, u.nome AS enviado_por FROM taloes t JOIN envios e ON e.id = t.envio_id JOIN users u ON u.id = e.user_id
      WHERE t.data = ? ORDER BY t.hora, t.id`,
     data,
   );

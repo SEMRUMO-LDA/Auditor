@@ -60,6 +60,10 @@ A app corre como função da Vercel (o `server.js` exporta a aplicação e o `ve
 
 Limites na Vercel: cada ficheiro carregado pode ter até 4 MB (limite de 4,5 MB por pedido da plataforma), a função tem 60 s por pedido, e a cada função corresponde uma única ligação à base de dados. O limite de tentativas de login guarda-se na base de dados, por isso vale entre instâncias.
 
+## Notas nos talões
+
+Quem envia um talão pode escrever uma nota para o auditor (até 500 caracteres) antes de o enviar, e pode editá-la ao confirmar. A nota aparece na confirmação do talão, em "Os meus envios", na lista de Talões, nos talões de cada fecho e nos detalhes das inconsistências ligadas a esse talão.
+
 ## Encriptação dos dados
 
 Em trânsito, a ligação ao Supabase e o site na Vercel usam TLS/HTTPS; em repouso, o Supabase e a Vercel encriptam os discos. Além disso, a app encripta com **AES-256-GCM**, antes de os gravar na base de dados, os dados mais sensíveis:

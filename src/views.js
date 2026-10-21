@@ -349,13 +349,13 @@ const celulaTerminal = (numero, ctx) => h`${numero}${ctx.terminais[numero]?.nome
 function tabelaTaloesDoMeio(taloes, ctx, data) {
   if (!taloes.length) return h`<p class="vazio">Nenhum talão (pay slip) associado.</p>`;
   return h`<div class="tabela-wrap"><table>
-  <thead><tr><th>ID</th><th>Hora</th><th>Terminal (nº do TPA)</th><th>Caixa do terminal</th><th class="num">Valor</th><th>Cartão</th><th>Reserva</th><th>Documento</th></tr></thead>
+  <thead><tr><th>ID</th><th>Hora</th><th>Terminal (nº do TPA)</th><th>Caixa do terminal</th><th class="num">Valor</th><th>Cartão</th><th>Reserva</th><th>Documento</th><th>Nota</th></tr></thead>
   <tbody>${taloes.map((t) => h`<tr><td><a class="chip-talao" href="/envios/${t.envio_id}">#${t.id}</a></td><td>${t.hora}</td><td>${celulaTerminal(t.tpa, ctx)}</td>
     <td>${!t.caixasTerminal.length ? formAssociar(ctx.terminais[t.tpa], ctx, data)
       : t.terminalOk === false ? h`${etiqueta('falta', t.caixasTerminal.join(', '))} <span class="suave">pagamento na caixa ${t.caixasDiario.join(', ')}</span>`
       : t.terminalOk === true ? etiqueta('ok', `${t.caixasTerminal.join(', ')} ✓`) : etiqueta('suave', t.caixasTerminal.join(', '))}</td>
-    <td class="num">${euros(t.valor)}</td><td>${t.cartao} ${t.ultimos4 ? `****${t.ultimos4}` : ''}</td><td>${t.reservas}</td><td>${t.doc_associado}</td></tr>`)}</tbody>
-  <tfoot><tr><th>Total</th><th></th><th></th><th></th><th class="num">${euros(taloes.reduce((s, t) => s + t.valor, 0))}</th><th></th><th></th><th></th></tr></tfoot>
+    <td class="num">${euros(t.valor)}</td><td>${t.cartao} ${t.ultimos4 ? `****${t.ultimos4}` : ''}</td><td>${t.reservas}</td><td>${t.doc_associado}</td><td class="nota-celula">${t.nota_envio}</td></tr>`)}</tbody>
+  <tfoot><tr><th>Total</th><th></th><th></th><th></th><th class="num">${euros(taloes.reduce((s, t) => s + t.valor, 0))}</th><th></th><th></th><th></th><th></th></tr></tfoot>
   </table></div>`;
 }
 
@@ -858,7 +858,7 @@ ${envios.length > 0 && h`<h3>Fotografias</h3><div class="fotos">${envios.map((e)
 function tabelaTaloes(taloes, mostrarDia) {
   if (!taloes.length) return h`<p class="vazio">Sem talões.</p>`;
   return h`<div class="tabela-wrap"><table>
-<thead><tr><th>ID</th>${mostrarDia && h`<th>Dia</th>`}<th>Hora</th><th>Tipo</th><th>TPA</th><th class="num">Valor</th><th>Cartão</th><th>Reserva</th><th>Documento</th><th>Enviado por</th><th></th></tr></thead>
+<thead><tr><th>ID</th>${mostrarDia && h`<th>Dia</th>`}<th>Hora</th><th>Tipo</th><th>TPA</th><th class="num">Valor</th><th>Cartão</th><th>Reserva</th><th>Documento</th><th>Nota</th><th>Enviado por</th><th></th></tr></thead>
 <tbody>${taloes.map((t) => h`<tr>
   <td><strong>#${t.id}</strong></td>
   ${mostrarDia && h`<td>${t.data ? h`<a href="/fechos/${t.data}">${dataPT(t.data)}</a>` : ''}</td>`}
@@ -869,6 +869,7 @@ function tabelaTaloes(taloes, mostrarDia) {
   <td>${t.cartao} ${t.ultimos4 && `****${t.ultimos4}`}</td>
   <td>${t.reservas}${t.reserva_origem === 'manual' ? h` <span class="suave" title="Introduzida à mão">✎</span>` : ''}</td>
   <td>${t.doc_associado}</td>
+  <td class="nota-celula">${t.nota_envio}</td>
   <td>${t.enviado_por}</td>
   <td><a href="/envios/${t.envio_id}">Ver</a></td>
 </tr>`)}</tbody></table></div>`;
@@ -898,6 +899,9 @@ export function novoTalaoPage(user, erro) {
       <button type="button" class="grande" data-escolher>Escolher ficheiro</button>
     </div>
     <div id="previa" hidden><img alt="Pré-visualização do talão"><p class="suave" id="previa-nome"></p></div>
+    <label class="nota-envio">Nota para o auditor <span class="suave">(opcional)</span>
+      <textarea name="nota" maxlength="500" rows="3" placeholder="Ex.: cliente pagou metade em dinheiro; talão repetido por falha do terminal…"></textarea>
+    </label>
     <button class="primario grande" id="enviar" hidden>Enviar e ler talão</button>
     <p class="suave" id="a-ler" hidden>A ler o talão… pode demorar alguns segundos.</p>
   </form>
@@ -949,6 +953,11 @@ ${erros.map((e) => aviso(e))}
     ? h`<object data="/envios/${envio.id}/ficheiro" type="application/pdf"><a href="/envios/${envio.id}/ficheiro">Abrir o PDF</a></object>`
     : h`<a href="/envios/${envio.id}/ficheiro" target="_blank"><img src="/envios/${envio.id}/ficheiro" alt="Fotografia do talão"></a>`}</div>
   <form method="post" action="/envios/${envio.id}" class="dados">
+    ${editavel
+    ? h`<label class="nota-envio">Nota <span class="suave">(opcional)</span>
+      <textarea name="nota" maxlength="500" rows="3" placeholder="Uma nota para o auditor sobre este talão">${envio.nota || ''}</textarea>
+    </label>`
+    : envio.nota && h`<div class="nota-lida"><strong>Nota de ${envio.enviado_por}</strong><p>${envio.nota}</p></div>`}
     <div id="taloes">${lista.map((t, i) => blocoTalao(i, t, editavel))}</div>
     ${editavel && h`
     <template id="modelo-talao">${blocoTalao('__i__', { tipo: 'compra' }, true)}</template>
@@ -965,11 +974,11 @@ export function meusEnviosPage(user, envios, ok) {
 <div class="cabecalho"><h1>Os meus envios</h1><a class="botao primario" href="/taloes/novo">Enviar talão</a></div>
 ${ok && aviso('Talão registado. Obrigado.', 'ok')}
 ${envios.length === 0 ? h`<p class="vazio">Ainda não enviou nenhum talão.</p>` : h`<div class="tabela-wrap"><table>
-<thead><tr><th>Enviado em</th><th>Estado</th><th>Talões</th><th class="num">Valor</th><th>Reserva</th><th></th></tr></thead>
+<thead><tr><th>Enviado em</th><th>Estado</th><th>Talões</th><th class="num">Valor</th><th>Reserva</th><th>Nota</th><th></th></tr></thead>
 <tbody>${envios.map((e) => h`<tr>
   <td>${quandoPT(e.criado_em)}</td>
   <td>${e.estado === 'confirmado' ? etiqueta('ok', 'Confirmado') : etiqueta('falta', 'Por confirmar')}</td>
-  <td>${e.n}</td><td class="num">${euros(e.total)}</td><td>${e.reservas}</td>
+  <td>${e.n}</td><td class="num">${euros(e.total)}</td><td>${e.reservas}</td><td class="nota-celula">${e.nota}</td>
   <td><a href="/envios/${e.id}">${e.estado === 'confirmado' ? 'Ver' : 'Confirmar'}</a></td>
 </tr>`)}</tbody></table></div>`}`, 'meus');
 }

@@ -122,8 +122,11 @@ CREATE TABLE IF NOT EXISTS envios (
   criado_em ${T} NOT NULL,
   estado ${T} NOT NULL DEFAULT 'rascunho' CHECK (estado IN ('rascunho', 'confirmado')),
   confirmado_em ${T}, confirmado_por INTEGER,
-  leitura_json ${T}, leitura_erro ${T}
+  leitura_json ${T}, leitura_erro ${T},
+  nota ${T}
 );
+-- Bases de dados criadas antes de existirem as notas dos utilizadores:
+ALTER TABLE envios ADD COLUMN IF NOT EXISTS nota ${T};
 CREATE TABLE IF NOT EXISTS taloes (
   id ${ID},
   envio_id INTEGER NOT NULL REFERENCES envios(id) ON DELETE CASCADE,
