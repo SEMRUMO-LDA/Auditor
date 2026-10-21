@@ -75,7 +75,7 @@ function pagina(user, titulo, corpo, ativo = '') {
   const nav = !user
     ? ''
     : user.role === 'auditor'
-      ? h`${link('/fechos', 'Fechos', 'fechos')}${link('/inconsistencias', 'Inconsistências', 'incs')}${link('/diarios', 'Diários', 'diarios')}${link('/taloes', 'Talões', 'taloes')}${link('/extratos', 'Extratos', 'extratos')}${link('/taloes/novo', 'Enviar talão', 'novo')}${link('/config/terminais', 'Configuração', 'config')}`
+      ? h`${link('/fechos', 'Fechos', 'fechos')}${link('/inconsistencias', 'Inconsistências', 'incs')}${link('/diarios', 'Diários', 'diarios')}${link('/taloes', 'Talões', 'taloes')}${link('/taloes/novo', 'Enviar talão', 'novo')}${link('/config/terminais', 'Configuração', 'config')}`
       : h`${link('/taloes/novo', 'Enviar talão', 'novo')}${link('/taloes/meus', 'Os meus envios', 'meus')}`;
   const papel = user && (user.role === 'auditor' ? 'Auditor' : 'Receção');
   return h`<!doctype html>
