@@ -82,9 +82,14 @@ A app é interna e está escondida dos motores de pesquisa: todas as respostas l
 
 ## Leitura automática dos talões
 
-O auditor adiciona a chave da API da Anthropic na própria app, em **Configuração › Leitura de talões**: a chave é validada com a Anthropic, guardada na base de dados (encriptada, se houver `ENCRYPTION_KEY`) e passa a valer logo, em Enviar talão, para todos os utilizadores. A chave nunca volta a ser mostrada (só os últimos 4 caracteres) e pode ser substituída ou removida na mesma página.
+O auditor escolhe o serviço e adiciona a chave da API na própria app, em **Configuração › Leitura de talões**. Há dois fornecedores:
 
-Como alternativa, pode definir a variável `ANTHROPIC_API_KEY` no servidor (`.env` ou Vercel); a chave guardada na app tem prioridade. Sem nenhuma chave a aplicação funciona, mas quem envia o talão tem de preencher os dados à mão. As fotografias são enviadas para a API da Anthropic para leitura.
+- **Google Gemini** (modelo por omissão `gemini-3.8-flash`, mudável na mesma página): chave do Google AI Studio (aistudio.google.com/apikey). Tem nível gratuito, mas **no nível gratuito a Google pode usar o conteúdo enviado para melhorar os seus produtos**; como os talões incluem dados de clientes, ative a faturação (nível pago) se não quiser isso.
+- **Anthropic (Claude)**: chave em console.anthropic.com (a conta precisa de crédito). É o que dá melhor leitura da reserva escrita à mão.
+
+A chave é validada com o fornecedor antes de guardar, fica na base de dados (encriptada, se houver `ENCRYPTION_KEY`) e passa a valer logo, em Enviar talão, para todos os utilizadores. Nunca volta a ser mostrada (só os últimos 4 caracteres) e pode ser substituída ou removida. Com as duas chaves guardadas, escolhe-se qual está em uso.
+
+Como alternativa às chaves da app, podem definir-se no servidor as variáveis `ANTHROPIC_API_KEY` ou `GEMINI_API_KEY` (a chave guardada na app tem prioridade). Sem nenhuma chave a aplicação funciona, mas quem envia o talão tem de preencher os dados à mão. As fotografias e PDF são enviados ao fornecedor escolhido para leitura, e o resultado é sempre mostrado para confirmação antes de ser usado.
 
 ## Utilização
 

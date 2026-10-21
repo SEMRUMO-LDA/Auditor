@@ -1037,29 +1037,48 @@ ${meios.length === 0 ? aviso('Os meios de pagamento aparecem depois de carregar 
 }
 
 export function leituraPage(user, estado, cifrada, msg, erro) {
-  const fim = estado.fim ? h` (termina em <strong>${estado.fim}</strong>)` : '';
-  const situacao = estado.origem === 'base'
-    ? aviso(h`A leitura automática está <strong>ativa</strong>. Chave guardada na base de dados${fim}${cifrada ? ', encriptada' : ''}.`, 'ok')
-    : estado.origem === 'ambiente'
-      ? aviso(h`A leitura automática está <strong>ativa</strong>, com a chave definida no servidor (variável ANTHROPIC_API_KEY)${fim}. Pode substituí-la aqui.`, 'ok')
-      : aviso(h`A leitura automática está <strong>desligada</strong>: sem chave, os talões têm de ser preenchidos à mão.`, 'info');
+  const { ativo, fornecedores } = estado;
+  const NOMES = { anthropic: 'Anthropic (Claude)', gemini: 'Google Gemini' };
+  const situacao = ativo
+    ? aviso(h`A leitura automática está <strong>ativa</strong>, com <strong>${NOMES[ativo]}</strong>. Aplica-se a todos os utilizadores, em Enviar talão.`, 'ok')
+    : aviso(h`A leitura automática está <strong>desligada</strong>: sem chave, os talões têm de ser preenchidos à mão.`, 'info');
+  const cartao = (f, titulo, ajuda, extra) => {
+    const e = fornecedores[f];
+    const fim = e.fim ? h` (termina em <strong>${e.fim}</strong>)` : '';
+    const estadoTxt = e.origem === 'base' ? h`Chave guardada na base de dados${fim}${cifrada ? ', encriptada' : ''}.`
+      : e.origem === 'ambiente' ? h`Chave definida no servidor (variável de ambiente)${fim}. Pode substituí-la aqui.`
+        : 'Sem chave.';
+    return h`<section class="cartao estreito">
+  <h2>${titulo} ${ativo === f ? etiqueta('ok', 'Em uso') : e.origem ? etiqueta('suave', 'Configurado') : ''}</h2>
+  <p class="suave">${estadoTxt}</p>
+  <form method="post" action="/config/leitura" autocomplete="off">
+    <input type="hidden" name="fornecedor" value="${f}">
+    <label>${e.origem ? 'Substituir a chave' : 'Chave da API'}
+      <input name="chave" type="password" placeholder="${f === 'anthropic' ? 'sk-ant-...' : 'Chave do Google AI Studio'}" autocomplete="off" spellcheck="false" required>
+    </label>
+    ${extra && extra(e)}
+    <p class="suave">${ajuda}</p>
+    <button class="primario">Validar e guardar</button>
+  </form>
+  <div class="acoes">
+    ${e.origem && ativo !== f && h`<form method="post" action="/config/leitura/ativar"><input type="hidden" name="fornecedor" value="${f}"><button>Usar este fornecedor</button></form>`}
+    ${e.origem === 'base' && h`<form method="post" action="/config/leitura/remover" data-confirmar="Remover a chave de ${NOMES[f]}?"><input type="hidden" name="fornecedor" value="${f}"><button class="perigo">Remover a chave</button></form>`}
+  </div>
+</section>`;
+  };
   return pagina(user, 'Leitura de talões', h`
 <div class="cabecalho"><h1>Configuração</h1></div>
 ${subnavConfig('leitura')}
-<p>Os talões enviados por qualquer utilizador são lidos automaticamente com a Anthropic (Claude). Basta adicionar aqui a chave da API; passa a valer logo para todos, em Enviar talão.</p>
+<p>Os talões enviados por qualquer utilizador são lidos automaticamente. Escolha o serviço e adicione aqui a chave da API; passa a valer logo para todos, em Enviar talão. As fotografias e PDF dos talões são enviados ao serviço escolhido para leitura.</p>
 ${aviso(msg, 'ok')}${aviso(erro)}
 ${situacao}
-<form method="post" action="/config/leitura" class="cartao estreito" autocomplete="off">
-  <h2>${estado.origem === 'base' ? 'Substituir a chave' : 'Adicionar a chave'}</h2>
-  <label>Chave da API da Anthropic
-    <input name="chave" type="password" placeholder="sk-ant-..." autocomplete="off" spellcheck="false" required>
-  </label>
-  <p class="suave">Crie-a em console.anthropic.com › Settings › API Keys (a conta precisa de crédito). A chave não volta a ser mostrada: só os últimos 4 caracteres.${cifrada ? '' : ' Atenção: sem ENCRYPTION_KEY no servidor, a chave fica guardada sem encriptar.'}</p>
-  <button class="primario">Validar e guardar</button>
-</form>
-${estado.origem === 'base' && h`<form method="post" action="/config/leitura/remover" data-confirmar="Remover a chave? A leitura automática fica desligada para todos.">
-  <button class="perigo">Remover a chave</button>
-</form>`}`, 'config');
+${cartao('gemini', 'Google Gemini',
+    h`Crie a chave em aistudio.google.com/apikey. <strong>Atenção:</strong> no nível gratuito a Google pode usar o conteúdo enviado para melhorar os seus produtos, e os talões incluem dados de clientes; para evitar isso, ative a faturação (nível pago) no Google AI Studio.${cifrada ? '' : ' Sem ENCRYPTION_KEY no servidor, a chave fica guardada sem encriptar.'}`,
+    (e) => h`<label>Modelo <span class="suave">(opcional)</span>
+      <input name="modelo" value="${e.modelo}" placeholder="gemini-3.8-flash" autocomplete="off" spellcheck="false">
+    </label>`)}
+${cartao('anthropic', 'Anthropic (Claude)',
+    h`Crie a chave em console.anthropic.com › Settings › API Keys (a conta precisa de crédito). A chave não volta a ser mostrada: só os últimos 4 caracteres.${cifrada ? '' : ' Sem ENCRYPTION_KEY no servidor, a chave fica guardada sem encriptar.'}`)}`, 'config');
 }
 
 export function utilizadoresPage(user, users, msg, erro) {
