@@ -2,6 +2,7 @@
 // Só deteta e regista inconsistências; nunca altera os dados de origem.
 import { all, get, run, tx, agora, config } from './db.js';
 import { cifrarTexto } from './cifra.js';
+import { cruzarBooking } from './booking.js';
 import { MEIO_NUMERARIO, totalContado } from './numerario.js';
 
 export const SEM_AGENCIA = '(direto)';
@@ -37,6 +38,8 @@ export const TIPOS = {
   RESERVAS_A_AGUARDAR: 'Reservas dentro do prazo de faturação',
   RESERVAS_AGENCIA: 'Reservas faturadas à agência',
   RESERVAS_COM_FA: 'Reservas faturadas a operadores (FA)',
+  BOOKING_SEM_PAGAMENTO: 'TBBOOKING sem pagamento da Booking.com',
+  BOOKING_SEM_FATURA: 'Pagamentos da Booking.com sem fatura TBBOOKING',
 };
 
 // Documentos FA: faturas dos operadores, em conta corrente (pagamento a 30 dias). Não têm pagamento no dia, por isso vêm
@@ -591,6 +594,40 @@ export async function reconciliar(data) {
         gravidade: 'info',
         titulo: `${LADOS[lado]}s: ${deAgencia.length} reserva(s) de agências faturadas à parte, sem fatura neste relatório (${totalDe(deAgencia)})`,
         detalhe: { texto: 'Reservas de agências marcadas em Configuração › Agências como faturadas fora deste relatório. Não são tratadas como erro.', registos: resumo(deAgencia) },
+      });
+    }
+  }
+
+  // ---------- E. Pagamentos da Booking.com contra os documentos TBBOOKING do PMS ----------
+  // A Booking paga no dia do check-out e o PMS fatura (TBBOOKING) alguns dias depois: cada fatura procura o seu pagamento em
+  // todos os relatórios carregados, e os pagamentos deste dia esperam pela sua fatura.
+  const booking = await cruzarBooking(data);
+  if (booking.carregado) {
+    const regBooking = (p) => ({
+      origem: 'Pagamento da Booking.com', Referência: p.ref, Propriedade: p.propriedade, 'Check-in': dataPT(p.checkin), 'Check-out': dataPT(p.checkout),
+      Valor: p.bruto, 'Pago a': dataPT(p.pagamento_data),
+    });
+    const regTB = (f) => ({ origem: 'Faturas', Documento: f.doc, Meio: 'TBBOOKING', Valor: f.valor, Reserva: f.reserva, Hóspede: f.hospede, Unidade: f.hotel, Quarto: f.quarto, 'Check-in': dataPT(f.checkin), 'Check-out': dataPT(f.checkout) });
+    for (const item of booking.semPagamento) {
+      add('BOOKING_SEM_PAGAMENTO', `${item.doc}|${cent(item.valor)}`, {
+        gravidade: 'aviso',
+        titulo: `${item.doc}: ${euros(cent(item.valor))} em TBBOOKING (reserva ${item.reserva || '?'}, ${item.hotel || 'sem unidade'}, ${dataPT(item.checkin)} a ${dataPT(item.checkout)}) sem pagamento no relatório da Booking.com`,
+        valor: item.valor,
+        detalhe: { texto: 'O PMS diz que a Booking.com pagou esta reserva (TBBOOKING) e há relatório de pagamentos para o dia do check-out, mas nenhuma linha tem a mesma propriedade, datas e valor. Pode ser outro valor (taxas, extras) ou um pagamento que falta.', registos: [regTB(item)] },
+      });
+    }
+    if (booking.semFatura.length) {
+      const total = booking.semFatura.reduce((t, p) => t + cent(p.bruto), 0);
+      add('BOOKING_SEM_FATURA', data, {
+        gravidade: booking.atrasados ? 'aviso' : 'info',
+        titulo: `Booking.com: ${booking.semFatura.length} pagamento(s) deste dia (${euros(total)}) ainda sem fatura TBBOOKING no PMS`,
+        valor: total / 100,
+        detalhe: {
+          texto: booking.atrasados
+            ? 'A Booking.com pagou estas reservas há vários dias e o PMS ainda não tem uma fatura TBBOOKING com a mesma propriedade, datas e valor. Confirme se foram faturadas com outro valor ou se falta faturar.'
+            : 'A Booking.com pagou estas reservas no dia do check-out; o PMS costuma emitir a fatura TBBOOKING alguns dias depois. Voltam a ser cruzadas quando carregar os dias seguintes.',
+          registos: booking.semFatura.map(regBooking),
+        },
       });
     }
   }

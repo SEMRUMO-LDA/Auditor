@@ -201,6 +201,7 @@ export function carregarPage(user, erro) {
     <li>Relatório de faturas por data da fatura (CSV)</li>
     <li>Lista de saídas e relatório de faturas por data de check-out (Invoices by Check-in, com ou sem a coluna da data da fatura)</li>
     <li>Lista de entradas e relatório de faturas por data de check-in</li>
+    <li>Relatório de pagamentos da Booking.com (Payout, CSV): cruza-se com as faturas TBBOOKING</li>
   </ul>
   <p class="suave">Pode carregar só alguns e juntar os restantes mais tarde. Se o dia já existir, cada ficheiro substitui o anterior do mesmo tipo e as notas já escritas mantêm-se.</p>
   ${aviso(erro)}
@@ -384,6 +385,14 @@ function contagemValidacoes(itens) {
   return [`${certas} certa(s)`, erros ? `${erros} a corrigir` : '', porValidar ? `${porValidar} por validar` : ''].filter(Boolean).join(' · ');
 }
 
+// Resumo dos pagamentos da Booking.com para as faturas TBBOOKING do dia (ver src/booking.js).
+function cartoesBooking(b) {
+  const total = b.ligados.length + b.semPagamento.length + b.semRelatorio.length;
+  return h`<div class="${b.semPagamento.length ? 'alerta' : ''}" title="Faturas TBBOOKING deste dia com um pagamento da Booking.com da mesma propriedade, datas e valor"><span>Com pagamento da Booking</span><strong>${b.ligados.length} de ${total}</strong></div>
+    <div><span>Pago pela Booking (ligado)</span><strong>${euros(b.totalPago / 100)}</strong></div>
+    ${b.semRelatorio.length ? h`<div title="O check-out destas faturas não tem relatório de pagamentos da Booking carregado"><span>Sem relatório da Booking</span><strong>${b.semRelatorio.length}</strong></div>` : ''}`;
+}
+
 function subPainel(g, fecho, numerario, fechosTPA, ctx) {
   const comFaturas = Boolean(fecho.faturas_ficheiro);
   const itens = g.itens;
@@ -403,6 +412,7 @@ function subPainel(g, fecho, numerario, fechosTPA, ctx) {
     <div><span>Faturas</span><strong>${comFaturas ? euros(faturado / 100) : '—'}</strong></div>
     <div class="${comFaturas && diario !== faturado ? 'alerta' : ''}"><span>Diferença</span><strong>${comFaturas ? euros((faturado - diario) / 100) : '—'}</strong></div>
     ${validar && validar.valor ? h`<div class="valida-card ${validar.validado ? 'validado' : ''}"><span>Validação do auditor</span>${formValidar(fecho.data, canal, validar, validar.validado ? 'Valor validado' : 'Validar este valor', { origem: 'dia' })}</div>` : ''}
+    ${g.chave === 'tbbooking' && ctx.booking?.carregado ? cartoesBooking(ctx.booking) : ''}
     ${ehTPA ? h`<div class="${soma('taloesSoma') !== diario ? 'alerta' : ''}"><span>Talões (pay slips)</span><strong>${euros(soma('taloesSoma') / 100)}</strong></div>` : ''}
   </div>
   <h3>Validações <span class="suave">${contagemValidacoes(itens)}</span></h3>
@@ -479,7 +489,7 @@ function blocoNumerario(fecho, n) {
 }
 
 export function fechoPage(user, d) {
-  const { fecho, totais, meios, porUtilizador, porAlojamento, pendentesSemAlojamento, analise, fechosTPA, terminaisPorNumero, caixasLista, incs, filtros, opcoes, taloes, contagem, reservas, numerario, validacao, apagarTexto } = d;
+  const { fecho, totais, meios, porUtilizador, porAlojamento, pendentesSemAlojamento, analise, fechosTPA, terminaisPorNumero, caixasLista, incs, filtros, opcoes, taloes, contagem, reservas, numerario, validacao, apagarTexto, booking } = d;
   const dif = totais.faturas - totais.diario;
   const grupos = gruposDeMeios(analise.porMeio);
   const totalIncs = (contagem.pendente || 0) + (contagem.justificada || 0) + (contagem.resolvida || 0);
@@ -536,7 +546,7 @@ ${caixaCorreta ? h`<p class="aviso ok caixa-correta">O total do diário, o total
     ${analise.taloesSemMeio.length ? aviso(`${analise.taloesSemMeio.length} talão(ões) de compra sem fatura associada ficam fora da validação por meio: ${analise.taloesSemMeio.map((t) => '#' + t.id).join(', ')}.`, 'info') : ''}
   </div>
 
-  ${grupos.map((g) => subPainel(g, fecho, numerario, fechosTPA, { terminais: terminaisPorNumero, caixas: caixasLista, validacao }))}
+  ${grupos.map((g) => subPainel(g, fecho, numerario, fechosTPA, { terminais: terminaisPorNumero, caixas: caixasLista, validacao, booking }))}
   ${blocoNumerario(fecho, numerario)}
 </section>
 

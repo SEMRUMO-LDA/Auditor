@@ -230,7 +230,8 @@ export function parseListaReservas(buffer) {
     .map((tr) => [...tr.matchAll(/<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi)].map((m) => semHtml(m[1])));
   // O cabeçalho pode não ser a primeira linha (títulos antes da tabela) e os nomes das colunas variam um pouco entre
   // exportações (maiúsculas, hífen, espaços, sinónimos): procura-se a linha de cabeçalho e comparam-se os nomes normalizados.
-  const normal = (s) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[^a-z0-9]+/g, ' ').trim();
+  const ACENTOS = new RegExp('[' + String.fromCharCode(0x300) + '-' + String.fromCharCode(0x36f) + ']', 'g');
+  const normal = (s) => String(s ?? '').toLowerCase().normalize('NFD').replace(ACENTOS, '').replace(/[^a-z0-9]+/g, ' ').trim();
   const SINONIMOS = {
     reserva: ['reservation number', 'reservation no', 'reservation', 'res no', 'reserva', 'numero da reserva', 'n reserva'],
     checkin: ['check in', 'checkin', 'arrival', 'arrival date', 'chegada'],
@@ -286,11 +287,61 @@ export function parseListaReservas(buffer) {
   return { tipo: 'lista', lado, data: lado === 'saida' ? diaSaida : diaEntrada, reservas };
 }
 
+// ---------- Relatório de pagamentos da Booking.com ("Payout") ----------
+// Valores com ponto decimal ("603.10"); "-" quando não se aplica. Há uma linha de total por propriedade (referência "-")
+// seguida das linhas de cada reserva paga.
+function decimal(s) {
+  const t = String(s ?? '').trim().replace(/\s/g, '');
+  if (!t || t === '-') return null;
+  const normal = t.includes(',') && !t.includes('.') ? t.replace(',', '.') : t.replace(/,/g, '');
+  const n = Number(normal);
+  return Number.isFinite(n) ? n : null;
+}
+const dataBooking = (s) => (/^\d{4}-\d{2}-\d{2}$/.test(String(s).trim()) ? String(s).trim() : dataISO(s));
+
+export function parseBooking(buffer) {
+  const linhas = parseCSV(descodificar(buffer));
+  const nomes = (linhas[0] || []).map((c) => c.trim().toLowerCase());
+  const col = (n) => nomes.indexOf(n);
+  const idx = {
+    ref: col('reference number'), checkin: col('check-in date'), checkout: col('check-out date'), emitida: col('issue date'),
+    propId: col('property id'), propNome: col('property name'), tipo: col('payout type'), bruto: col('gross amount'),
+    moeda: col('transaction currency'), aPagar: col('payable amount'), pagamento: col('payout date'),
+  };
+  const faltam = Object.entries({ 'Reference number': idx.ref, 'Issue date': idx.emitida, 'Gross amount': idx.bruto, 'Payout date': idx.pagamento }).filter(([, i]) => i < 0).map(([n]) => n);
+  if (faltam.length) throw new ErroFicheiro(`Não reconheço este ficheiro como o relatório de pagamentos da Booking.com: faltam as colunas ${faltam.join(', ')}.`);
+  const campo = (l, i) => (i < 0 ? '' : (l[i] ?? '').trim());
+  const pagamentos = [];
+  const totais = new Map(); // propriedade → valor total a pagar (linha com referência "-")
+  for (const l of linhas.slice(1)) {
+    if (vazia(l)) continue;
+    const ref = campo(l, idx.ref);
+    if (!ref) continue;
+    if (ref === '-') {
+      totais.set(campo(l, idx.propId), decimal(campo(l, idx.aPagar)) ?? 0);
+      continue;
+    }
+    const emitida = dataBooking(campo(l, idx.emitida));
+    if (!emitida) continue;
+    pagamentos.push({
+      ref, tipo: campo(l, idx.tipo) || 'Gross', checkin: dataBooking(campo(l, idx.checkin)), checkout: dataBooking(campo(l, idx.checkout)), emitida,
+      propriedade_id: campo(l, idx.propId), propriedade: campo(l, idx.propNome),
+      bruto: decimal(campo(l, idx.bruto)), a_pagar: decimal(campo(l, idx.aPagar)), moeda: campo(l, idx.moeda) || 'EUR',
+      pagamento_data: dataBooking(campo(l, idx.pagamento)),
+    });
+  }
+  if (!pagamentos.length) throw new ErroFicheiro('O relatório de pagamentos da Booking.com não tem nenhuma reserva.');
+  // O dia do relatório é o dia de check-out (Issue date) mais frequente; os restantes dias também se cruzam.
+  const [dia] = moda(pagamentos.map((p) => ({ d: p.emitida })), 'd');
+  return { tipo: 'booking', data: dia, pagamentos, totais: Object.fromEntries(totais) };
+}
+
 // Reconhece qualquer um dos ficheiros do dia pelo conteúdo, sem depender do nome.
 export function identificar(buffer) {
   const inicio = buffer.subarray(0, 6000).toString('latin1');
   if (/<table/i.test(inicio)) return parseListaReservas(buffer);
   if (inicio.includes('UserCode') || inicio.includes('Group22')) return { tipo: 'diario', ...parseDiario(buffer) };
+  if (/Reference number/i.test(inicio) && /Payout type/i.test(inicio)) return parseBooking(buffer);
   if (/InvoiceNo_formatted/i.test(inicio)) return classificarRelatorio(lerRelatorioFaturas(descodificar(buffer)));
-  throw new ErroFicheiro('Não reconheço este ficheiro. São aceites o diário de caixa, os relatórios de faturas e as listas de reservas.');
+  throw new ErroFicheiro('Não reconheço este ficheiro. São aceites o diário de caixa, os relatórios de faturas, as listas de reservas e o relatório de pagamentos da Booking.com.');
 }

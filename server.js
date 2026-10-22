@@ -18,6 +18,7 @@ import { analisarMeios } from './src/meios.js';
 
 
 import { mapaValidacoes, validacaoDoDia, definirValidacao } from './src/validacao.js';
+import { cruzarBooking } from './src/booking.js';
 import * as v from './src/views.js';
 
 const app = express();
@@ -272,7 +273,7 @@ app.get('/fechos/:data', exigirAuditor, async (req, res, next) => {
   const [
     totais, meios, porUtilizador, valoresPorUtilizador, contagemLinhas, alojamentos, alojamentosPendentes, quantidadesLinhas, esperadoNumerario,
     terminais, movimentosDia, faturasDia, taloesCompra, fechos, movimentosCartao, caixasLista, taloesDoDia,
-    validacao, apagarTexto, reservas, incs, opcoes,
+    validacao, apagarTexto, reservas, incs, opcoes, booking,
   ] = await Promise.all([
     get(
       `SELECT
@@ -319,6 +320,7 @@ app.get('/fechos/:data', exigirAuditor, async (req, res, next) => {
     resumoReservas(data),
     listarIncs(lerFiltros(req.query, { data })),
     opcoesFiltro(data),
+    cruzarBooking(data),
   ]);
 
   const valoresUtilizador = new Map();
@@ -394,7 +396,7 @@ app.get('/fechos/:data', exigirAuditor, async (req, res, next) => {
     v.fechoPage(req.user, {
       fecho, totais, meios, porUtilizador, porAlojamento, pendentesSemAlojamento, analise, fechosTPA, terminaisPorNumero: Object.fromEntries(terminaisPorNumero),
       caixasLista: caixasLista.map((c) => c.codigo), contagem, filtros, numerario,
-      validacao, apagarTexto, reservas, incs, opcoes, taloes: taloesDoDia,
+      validacao, apagarTexto, reservas, incs, opcoes, taloes: taloesDoDia, booking,
     }),
   );
 });

@@ -64,6 +64,16 @@ Limites na Vercel: cada ficheiro carregado pode ter até 4 MB (limite de 4,5 MB 
 
 Quem envia um talão pode escrever uma nota para o auditor (até 500 caracteres) antes de o enviar, e pode editá-la ao confirmar. A nota aparece na confirmação do talão, em "Os meus envios", na lista de Talões, nos talões de cada fecho e nos detalhes das inconsistências ligadas a esse talão.
 
+## Pagamentos da Booking.com
+
+O relatório de pagamentos da Booking.com ("Payout", CSV) carrega-se com os outros ficheiros do PMS: é reconhecido pelo conteúdo. Cada linha é uma reserva paga (referência da Booking, check-in, check-out, valor) e fica guardada na base de dados; carregar o mesmo relatório outra vez não duplica nada.
+
+Cruza-se com as **faturas TBBOOKING** do PMS pela propriedade (os nomes do PMS e da Booking reconhecem-se apesar das diferenças de escrita), pelas datas de check-in e check-out e pelo valor. Como a Booking paga no dia do check-out e o PMS só emite a fatura TBBOOKING alguns dias depois, cada fatura procura o seu pagamento em todos os relatórios carregados, de qualquer dia:
+
+- no separador TBBOOKING de cada fecho aparece quantas faturas têm pagamento da Booking, o valor pago e quantas não têm relatório carregado para o seu check-out;
+- fatura TBBOOKING com relatório carregado para esse check-out mas sem linha igual: aviso "TBBOOKING sem pagamento da Booking.com";
+- pagamentos de um dia ainda sem fatura TBBOOKING: informação ("Pagamentos da Booking.com sem fatura TBBOOKING"); passa a aviso se já passaram mais de 5 dias até ao último dia carregado.
+
 ## Documentos FA
 
 Os documentos **FA** são faturas dos operadores, em conta corrente e com pagamento a 30 dias: não têm pagamento no dia (vêm com valor 0,00 e sem meio de pagamento). Por isso uma reserva com documento FA conta como faturada (não aparece como "sem fatura" nem "faturada abaixo do total"), e uma FA emitida no dia não exige movimento no diário de caixa. As reservas faturadas assim aparecem agrupadas numa inconsistência informativa ("Reservas faturadas a operadores (FA)") para o auditor acompanhar o recebimento. As faturas FR continuam a exigir o seu pagamento.

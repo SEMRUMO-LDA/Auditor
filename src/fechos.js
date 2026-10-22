@@ -1,6 +1,7 @@
-import { run, tx, agora } from './db.js';
+import { all, run, tx, agora } from './db.js';
 import { identificar, ErroFicheiro } from './parsers.js';
 import { reconciliar, SEM_AGENCIA } from './reconcile.js';
+import { guardarBooking } from './booking.js';
 
 // Só se comparam com talões os pagamentos por MB Way, Visa e Mastercard. Multibanco, numerário,
 // transferências, Booking e Stripe não precisam de talão. O auditor pode alterar em Configuração.
@@ -114,6 +115,7 @@ const DESCRICAO = {
   'lista|entrada': 'lista de entradas',
   'faturas_reserva|saida': 'faturas das saídas',
   'faturas_reserva|entrada': 'faturas das entradas',
+  booking: 'pagamentos da Booking.com',
 };
 
 // Recebe os ficheiros de um dia (qualquer subconjunto, por qualquer ordem), reconhece cada um pelo
@@ -134,16 +136,26 @@ export async function importar(ficheiros, userId) {
     }
   }
   if (erros.length) throw new ErroFicheiro(erros.join(' '));
-  const dias = [...new Set(lidos.map((l) => l.dados.data))];
+  // O relatório de pagamentos da Booking.com pode cobrir vários dias de check-out: não obriga os outros ficheiros a serem desse dia.
+  const doDia = lidos.filter((l) => l.papel !== 'booking');
+  const dias = [...new Set((doDia.length ? doDia : lidos).map((l) => l.dados.data))];
   if (dias.length > 1) {
     throw new ErroFicheiro(`Os ficheiros são de dias diferentes: ${lidos.map((l) => `"${l.nome}" é ${DESCRICAO[l.papel]} de ${dataPT(l.dados.data)}`).join('; ')}.`);
   }
+  let diasBooking = [];
   for (const { nome, dados } of lidos) {
     if (dados.tipo === 'diario') await guardarDiario(dados, nome, userId);
     else if (dados.tipo === 'faturas') await guardarFaturas(dados, nome, userId);
     else if (dados.tipo === 'lista') await guardarLista(dados, nome);
+    else if (dados.tipo === 'booking') diasBooking = await guardarBooking(dados, nome);
     else await guardarFaturasReserva(dados, nome);
   }
   await reconciliar(dias[0]);
+  // As faturas TBBOOKING dos dias seguintes (o PMS fatura alguns dias depois do check-out) procuram o seu pagamento neste relatório.
+  if (diasBooking.length) {
+    const fim = new Date(new Date(diasBooking[diasBooking.length - 1]).getTime() + 14 * 86400e3).toISOString().slice(0, 10);
+    const afetados = (await all('SELECT data FROM fechos WHERE data >= ? AND data <= ? ORDER BY data', diasBooking[0], fim)).map((f) => f.data);
+    for (const d of afetados) if (d !== dias[0]) await reconciliar(d);
+  }
   return { data: dias[0], ficheiros: lidos.map((l) => ({ nome: l.nome, descricao: DESCRICAO[l.papel] })) };
 }
