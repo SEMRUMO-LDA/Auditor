@@ -49,3 +49,33 @@ test('um relatório com faturas mas sem datas de check-in/out repetidas continua
   const variado = CSV.replace('16/10/2026,20/10/2026,"117,35",FR 1021300/3', '10/10/2026,25/10/2026,"117,35",FR 1021300/3').replace('18/10/2026,20/10/2026,"90,36"', '12/10/2026,22/10/2026,"90,36"');
   assert.throws(() => identificar(Buffer.from(variado)), (e) => e instanceof ErroFicheiro && /datas de check-in e de check-out variam/.test(e.message));
 });
+
+// ---------- Lista de reservas (.xls que é uma tabela HTML) ----------
+const { parseListaReservas } = await import('../src/parsers.js');
+const html = (linhas) => `<html><body><table>${linhas.map((l, i) => `<tr>${l.map((c) => `<t${i === 0 ? 'h' : 'd'}>${c}</t${i === 0 ? 'h' : 'd'}>`).join('')}</tr>`).join('')}</table></body></html>`;
+const CAB = ['Reservation number', 'Check-In', 'Check-Out', 'Unit', 'Guest', 'Agency', 'Pax', 'Market', 'Dist. Channel', 'Info', 'Total Price', 'Status', 'User'];
+const RES = (n) => [n, '16-10-2026', '20-10-2026', 'Hotel Exemplo', 'Hóspede', '', '2', '', '', '', '117,35', 'Confirmed', 'rec'];
+
+test('lista de reservas: formato habitual', () => {
+  const r = parseListaReservas(Buffer.from(html([CAB, RES('1'), RES('2')])));
+  assert.equal(r.reservas.length, 2);
+  assert.equal(r.lado, 'saida');
+  assert.equal(r.data, '2026-10-20');
+  assert.equal(r.reservas[0].total, 117.35);
+});
+
+test('lista de reservas: cabeçalho que não é a primeira linha e nomes de colunas com outra grafia', () => {
+  const cab = ['reservation  number', 'CHECK IN', 'check-out', 'unit', 'guest', 'agency', 'pax', 'market', 'dist channel', 'info', 'Total price', 'STATUS', 'user'];
+  const tabelaComTitulo = `<table><tr><td>Lista de reservas</td></tr><tr><td></td></tr><tr>${cab.map((c) => `<td>${c}</td>`).join('')}</tr>${[RES('7'), RES('8')].map((l) => `<tr>${l.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')}</table>`;
+  const r = parseListaReservas(Buffer.from(tabelaComTitulo));
+  assert.deepEqual(r.reservas.map((x) => x.reserva), ['7', '8']);
+  assert.equal(r.reservas[0].status, 'Confirmed');
+});
+
+test('lista de reservas: sem uma coluna obrigatória, a mensagem diz quais faltam e quais foram encontradas', () => {
+  const semTotal = CAB.filter((c) => c !== 'Total Price' && c !== 'Status');
+  assert.throws(
+    () => parseListaReservas(Buffer.from(html([semTotal, RES('1').slice(0, 11).filter((_, i) => i !== 10)]))),
+    (e) => e instanceof ErroFicheiro && /faltam as colunas Total Price, Status\. Colunas encontradas: Reservation number, Check-In/.test(e.message),
+  );
+});

@@ -228,18 +228,43 @@ export function parseListaReservas(buffer) {
     .split(/<tr[^>]*>/i)
     .slice(1)
     .map((tr) => [...tr.matchAll(/<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi)].map((m) => semHtml(m[1])));
-  const cabecalho = linhas[0] || [];
-  const col = (nome) => cabecalho.indexOf(nome);
-  const idx = {
-    reserva: col('Reservation number'), checkin: col('Check-In'), checkout: col('Check-Out'), unidade: col('Unit'),
-    hospede: col('Guest'), agencia: col('Agency'), pax: col('Pax'), mercado: col('Market'), canal: col('Dist. Channel'),
-    info: col('Info'), total: col('Total Price'), status: col('Status'), criada_por: col('User'),
+  // O cabeçalho pode não ser a primeira linha (títulos antes da tabela) e os nomes das colunas variam um pouco entre
+  // exportações (maiúsculas, hífen, espaços, sinónimos): procura-se a linha de cabeçalho e comparam-se os nomes normalizados.
+  const normal = (s) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[^a-z0-9]+/g, ' ').trim();
+  const SINONIMOS = {
+    reserva: ['reservation number', 'reservation no', 'reservation', 'res no', 'reserva', 'numero da reserva', 'n reserva'],
+    checkin: ['check in', 'checkin', 'arrival', 'arrival date', 'chegada'],
+    checkout: ['check out', 'checkout', 'departure', 'departure date', 'partida'],
+    unidade: ['unit', 'unidade', 'room', 'quarto'],
+    hospede: ['guest', 'guest name', 'hospede'],
+    agencia: ['agency', 'agencia'],
+    pax: ['pax', 'persons'],
+    mercado: ['market', 'mercado'],
+    canal: ['dist channel', 'distribution channel', 'channel', 'canal'],
+    info: ['info', 'notes', 'notas'],
+    total: ['total price', 'total', 'total cost', 'price', 'preco total'],
+    status: ['status', 'estado'],
+    criada_por: ['user', 'utilizador', 'created by'],
   };
-  if (idx.reserva < 0 || idx.checkin < 0 || idx.checkout < 0 || idx.total < 0 || idx.status < 0) {
-    throw new ErroFicheiro('Não reconheço este ficheiro como uma lista de reservas (faltam colunas esperadas).');
+  const mapear = (cab) => {
+    const nomes = cab.map(normal);
+    return Object.fromEntries(Object.entries(SINONIMOS).map(([k, lista]) => [k, nomes.findIndex((n) => lista.includes(n))]));
+  };
+  let cabecalhoIdx = linhas.slice(0, 15).findIndex((l) => {
+    const m = mapear(l);
+    return m.reserva >= 0 && m.checkin >= 0 && m.checkout >= 0;
+  });
+  if (cabecalhoIdx < 0) cabecalhoIdx = 0;
+  const cabecalho = linhas[cabecalhoIdx] || [];
+  const idx = mapear(cabecalho);
+  const OBRIGATORIAS = { reserva: 'Reservation number', checkin: 'Check-In', checkout: 'Check-Out', total: 'Total Price', status: 'Status' };
+  const faltam = Object.entries(OBRIGATORIAS).filter(([k]) => idx[k] < 0).map(([, nome]) => nome);
+  if (faltam.length) {
+    const encontradas = cabecalho.map((c) => c.trim()).filter(Boolean).join(', ');
+    throw new ErroFicheiro(`Não reconheço este ficheiro como uma lista de reservas: faltam as colunas ${faltam.join(', ')}. Colunas encontradas: ${encontradas || '(nenhuma)'}. Exporte a lista com estas colunas.`);
   }
   const campo = (linha, i) => (i < 0 ? '' : (linha[i] ?? '').trim());
-  const reservas = linhas.slice(1).filter((l) => campo(l, idx.reserva)).map((l) => ({
+  const reservas = linhas.slice(cabecalhoIdx + 1).filter((l) => campo(l, idx.reserva)).map((l) => ({
     reserva: campo(l, idx.reserva),
     checkin: dataISO(campo(l, idx.checkin)),
     checkout: dataISO(campo(l, idx.checkout)),
